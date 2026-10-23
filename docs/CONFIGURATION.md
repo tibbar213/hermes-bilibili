@@ -1,0 +1,52 @@
+# 配置与工具
+
+## 三种配置位置
+
+| 位置 | 用途 |
+| --- | --- |
+| Hermes config.yaml | 插件启用、后台启动、QQ 主人身份、渠道 toolset |
+| profile/bilibili/settings.json | B 站行为设置、定时计划、直播间目标 |
+| profile/bilibili/credentials.json | SESSDATA、BILI_JCT 等账号凭据，禁止提交仓库 |
+
+config_schema.json 来自上游核心，是配置默认值参考；其中部分 AstrBot 命令、WebUI 和独立模型渠道说明不适用于原生插件。本文及原生 CLI 是本项目的安装入口。
+
+## 后台行为
+
+ENABLE_REPLY 控制评论/@回复；ENABLE_PRIVATE_MESSAGES 与 PRIVATE_MESSAGE_AUTO_REPLY 控制私信轮询和回复。ENABLE_PROACTIVE 控制自主浏览，ENABLE_DYNAMIC 控制自主动态。安装示例将其关闭；启用后会产生真实账号行为。
+
+当前版本在 settings.py 强制设置自动行为上限：浏览 3/天、动态 1/天、评论回复 20/天、私信回复 20/天；自动投币与自动关注关闭。它们是项目当前的默认策略上限，不是承诺必定执行的数量。模型决定计划，调度遵守睡眠时间、冷却和持久预算。显式手动互动按调用侧授权处理。
+
+VIDEO_SUBTITLES_ONLY 固定为 true；没有可靠字幕就跳过，保留已存在的可信缓存。SHARED_HERMES_MEMORY 固定为 true；人格演化关闭，避免产生第二份人格。不要靠修改旧版独立模型 API 字段建立另一套路由，原生模型调用交给 Hermes。
+
+## 直播
+
+```sh
+hermes bilibili live --room-id 你的房间号
+hermes bilibili live --room-id 0
+```
+
+直播读取房间弹幕历史并低频轮询回复，不读取主播音频、画面或直播字幕。房间号 0 表示不加入任何直播间。配置 ENABLE_LIVE_DANMAKU_REPLY 可保留功能开关；LIVE_DANMAKU_ROOM_ID 决定实际目标。当前不包含直播 ASR。
+
+## 工具与权限
+
+| 工具 | 功能/授权要求 |
+| --- | --- |
+| search_bilibili | 搜索视频/番剧等公开信息 |
+| bili_parse_video | 解析视频链接或编号 |
+| watch_video | 从缓存或字幕分析视频 |
+| bili_bangumi | 查询番剧；watch 属于有状态操作 |
+| bili_watch_videos | 执行自主浏览流程，不作为简单查询放行 |
+| bili_action | 评论、点赞、投币、收藏、关注；需要任务授权 |
+| bili_block_user | 拉黑；需要明确授权 |
+| bili_recall | 查看 B 站活动/会话记录；仅配置的 QQ 主人可调用 |
+| bilibili_manage | 状态、登录、调度、动态和直播管理；仅配置的 QQ 主人或终端 |
+
+QQ 权限扩展应按参数区分查询/写操作。bilibili_manage 的 status/check/plan 可归入查询，但管理函数仍检查主人身份。login/confirm 仅主人私聊或终端可用；dynamic 会真实发动态，live 会改变监听目标。不要仅靠工具说明文字判断授权。
+
+当前管理身份以 QQ 官方机器人 OpenID 为准；其他聊天平台尚无管理身份映射。纯终端用户不必填写 QQ 主人，终端仍可管理。插件不包含整个 QQ 渠道适配器。
+
+## 记忆与数据
+
+长期事实通过 Hermes 原生 MemoryStore 读写同一个 MEMORY.md/USER.md，遵守原生开关、文件锁和容量限制。当前记忆后端为 Hermes 内置 MemoryStore，尚未适配第三方记忆 provider。QQ 每轮刷新同一份笔记，B 站文本生成同样读取它。
+
+SQLite/JSON 保存会话、视频缓存、去重和预算，不再独立晋升人格长期记忆。记忆满时不会自动挤掉已有条目；活动记录仍保留。不同平台的用户不会自动认定为同一个人。

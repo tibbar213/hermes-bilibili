@@ -1,0 +1,10 @@
+# 本项目是 Hermes 目录插件，按 plugin.yaml 安装，不是 pip 安装包。
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+target-version = "py311"
+exclude = ["core", "runtime.py"]
+
+[tool.ruff.lint]
+select = ["F"]

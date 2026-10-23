@@ -1,0 +1,12 @@
+# 合并到现有配置；不要覆盖原文件。
+plugins:
+  enabled:
+    - hermes-bilibili
+  entries:
+    hermes-bilibili:
+      settings:
+        enabled: false  # 完成账号/行为设置后再开启后台
+        owner_qq: "YOUR_QQ_OPENID"  # 纯终端管理可省略
+platform_toolsets:
+  qqbot:
+    - bilibili  # 保留现有的其他 toolset

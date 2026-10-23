@@ -1,0 +1,6 @@
+# 使用 Hermes 自身的依赖管理器补齐缺失依赖；不要覆盖其已有版本策略。
+aiohttp>=3.10
+cryptography>=42
+openai>=1
+Pillow>=10
+pydantic>=2
