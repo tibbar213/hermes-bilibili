@@ -10,6 +10,7 @@ import logging
 logger = logging.getLogger("hermes_bilibili")
 from .network import download_proxy_args, redact_proxy_error
 from .video_inspection import VideoInspectionMixin
+from .video_evidence import video_evidence
 from .config import VIDEO_MEMORY_FILE, TEMP_VIDEO_DIR, EXTERNAL_MEMORY_FILE
 
 
@@ -186,6 +187,7 @@ class VideoMixin(VideoInspectionMixin):
                         "bvid": actual_bvid,
                         "from_cache": True,
                         "seen_only": True,
+                        **video_evidence("seen_only", from_cache=True, seen_only=True),
                     }
                 logger.info(f"[BiliBot] 🎬 开始观看私信分享视频：《{vi.get('title', '')}》")
                 analysis_info["_force_rewatch"] = force_rewatch or removed_bad_cache
@@ -193,9 +195,11 @@ class VideoMixin(VideoInspectionMixin):
                     await self._analyze_video_with_vision(analysis_info), 1600
                 )
                 if analysis_info.get("_subtitle_skipped"):
-                    return {"ok": False, "inferred": bool(video_description),
-                            "content_analyzed": False, "analysis_basis": "metadata", "bvid": actual_bvid,
-                            "message": video_description or "这个视频没有可靠字幕，也没有足够资料推测内容；未标记为已观看"}
+                    evidence = video_evidence("metadata", available=bool(video_description))
+                    return {"ok": False, "inferred": bool(video_description), "bvid": actual_bvid,
+                            **evidence,
+                            "message": f"[{evidence['heading']}]\n{evidence['evidence_note']}\n"
+                            + (video_description or "未标记为已观看")}
                 if analysis_info.get("_analysis_from_cache"):
                     return await self._watch_video_and_save_memory(actual_bvid, memory_source=memory_source)
                 evaluation = {}  # Evidence only; the native Agent decides preferences and reactions.
@@ -239,8 +243,10 @@ class VideoMixin(VideoInspectionMixin):
 
             link = f"https://www.bilibili.com/video/{actual_bvid}"
             memory_note = "记忆已老化，仅保留摘要与当时感受，未重新观看。\n" if from_cache and cached.get("memory_stage") == "faded" else ""
+            basis = cached.get("analysis_basis", "unknown") if from_cache else analysis_info.get("analysis_basis", "unknown")
+            evidence = video_evidence(basis, from_cache=from_cache)
             message = (
-                f"[{'已从记忆读取视频' if from_cache else '已完成视频分析'}]\n"
+                f"[{evidence['heading']}]\n{evidence['evidence_note']}\n"
                 f"标题：{vi.get('title', '')}\n"
                 f"{memory_note}"
                 f"UP主：{vi.get('owner_name', '')}(UID:{vi.get('owner_mid', '')}) | 分区：{vi.get('tname', '')}\n"
@@ -258,6 +264,7 @@ class VideoMixin(VideoInspectionMixin):
                 "video_info": share_info,
                 "bvid": actual_bvid,
                 "from_cache": from_cache,
+                **evidence,
             }
         except Exception as exc:
             logger.error(f"[BiliBot] 看视频异常: {exc}")

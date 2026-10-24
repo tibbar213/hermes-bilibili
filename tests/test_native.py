@@ -381,6 +381,8 @@ def test_inferred_video_response_is_not_rated_or_marked_seen():
         _save_json=Mock(side_effect=AssertionError('no watched cache')))
     result=asyncio.run(VideoMixin._watch_video_and_save_memory(native,'BVfixture'))
     assert result['inferred'] and not result['ok'] and not result['content_analyzed']
+    assert result['status']=='metadata_only' and '未读到视频正文' in result['message']
+    assert '已完成视频分析' not in result['message']
     assert '推测' in result['message']
     native._evaluate_video.assert_not_awaited()
     native._mark_video_seen.assert_not_awaited()
@@ -469,3 +471,26 @@ def test_activity_overview_marks_oversized_dynamic_truncation():
     result = BiliBotMemoryAPI(SimpleNamespace(_load_json=load)).activity_overview("2026-10-24")
     assert "长" * 1000 in result and "长" * 1001 not in result
     assert "已截断" in result
+
+
+@pytest.mark.parametrize("basis,kwargs,status,analyzed", [
+    ("subtitles", {}, "subtitles_read", True),
+    ("subtitles", {"from_cache": True}, "subtitles_read", True),
+    ("metadata", {}, "metadata_only", False),
+    ("metadata", {"from_cache": True}, "metadata_only", False),
+    ("metadata", {"available": False}, "unavailable", False),
+    ("seen_only", {"seen_only": True, "from_cache": True}, "seen_record", False),
+    ("legacy", {"from_cache": True}, "basis_unknown", False),
+    ("video_media", {}, "media_read", True),
+])
+def test_video_evidence_keeps_request_success_separate_from_content(basis,kwargs,status,analyzed):
+    from hermes_bili_test.core.video_evidence import video_evidence
+    evidence=video_evidence(basis, **kwargs)
+    assert evidence['status']==status and evidence['content_analyzed'] is analyzed
+    assert evidence['analysis_basis']==basis and evidence['evidence_note']
+    if kwargs.get('from_cache'):
+        assert evidence['from_cache']
+    if status=='metadata_only':
+        assert '未读到视频正文' in evidence['heading']
+    if status=='subtitles_read':
+        assert '字幕' in evidence['heading']
