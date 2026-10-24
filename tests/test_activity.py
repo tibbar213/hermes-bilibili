@@ -119,3 +119,55 @@ def test_real_host_metadata_browse_is_recorded_without_becoming_watched(tmp_path
     from datetime import datetime
     row=list_activity(tmp_path/'bilibili',datetime.now().strftime('%Y-%m-%d'))[0]
     assert row['status']=='metadata_only' and row['title']=='只是浏览'
+
+
+@pytest.mark.parametrize("value",[0,"0"])
+def test_explicit_unlimited_replies_survive_config_save(tmp_path,value):
+    from activity_test_plugin.settings import Config,effective_limits
+    config=Config(tmp_path,{'AUTONOMOUS_REPLY_DAILY_LIMIT':value,'AUTONOMOUS_DYNAMIC_DAILY_LIMIT':2,'AUTONOMOUS_PRIVATE_DAILY_LIMIT':0})
+    config.save_config()
+    loaded=Config(tmp_path)
+    assert loaded['AUTONOMOUS_REPLY_DAILY_LIMIT']==loaded['AUTONOMOUS_REPLY_DAILY_MAX']==0
+    assert loaded['DYNAMIC_DAILY_COUNT']==loaded['AUTONOMOUS_DYNAMIC_DAILY_MAX']==2
+    assert effective_limits(loaded)[0]['reply']==0
+    assert loaded['AUTONOMOUS_PRIVATE_DAILY_LIMIT']==20
+
+
+def test_unlimited_replies_keep_statistics_and_do_not_exhaust_other_daily_budgets(tmp_path):
+    from activity_test_plugin.settings import Config
+    from activity_test_plugin.core.layered_runtime import LayeredRuntime
+    from activity_test_plugin.core.runtime import ActionRequest
+    from datetime import datetime
+    async def run():
+        config=Config(tmp_path,{'AUTONOMOUS_REPLY_DAILY_LIMIT':0,'AUTONOMOUS_DYNAMIC_DAILY_LIMIT':2,'BEHAVIOR_GLOBAL_MAX_PER_MINUTE':1000})
+        runtime=LayeredRuntime(config,tmp_path/'bilibot.sqlite3')
+        await runtime.open()
+        try:
+            for i in range(250):
+                result=await runtime.before_action(ActionRequest(key='unlimited-'+str(i),kind='comment_reply',event_key='reply-'+str(i),target_id='video'))
+                assert result[0],result
+            for i in range(2):
+                assert (await runtime.before_action(ActionRequest(key='dynamic-'+str(i),kind='post_dynamic',event_key='post-'+str(i),target_id='self')))[0]
+            assert not (await runtime.before_action(ActionRequest(key='dynamic-3',kind='post_dynamic',event_key='post-3',target_id='self')))[0]
+            usage=daily_usage(tmp_path,config,datetime.now().strftime('%Y-%m-%d'))['usage']
+            assert usage['comment_reply']=={'used':250,'limit':None,'remaining':None}
+            assert usage['global']['used']==2
+        finally:
+            await runtime.close()
+    asyncio.run(run())
+
+
+def test_unlimited_daily_replies_still_obey_per_minute_limit(tmp_path):
+    from activity_test_plugin.settings import Config
+    from activity_test_plugin.core.layered_runtime import LayeredRuntime
+    from activity_test_plugin.core.runtime import ActionRequest
+    async def run():
+        config=Config(tmp_path,{'AUTONOMOUS_REPLY_DAILY_LIMIT':0,'BEHAVIOR_GLOBAL_MAX_PER_MINUTE':2})
+        runtime=LayeredRuntime(config,tmp_path/'budget.sqlite3')
+        await runtime.open()
+        try:
+            for i in range(2):assert (await runtime.before_action(ActionRequest(key=str(i),kind='comment_reply',event_key=str(i),target_id='v')))[0]
+            denied=await runtime.before_action(ActionRequest(key='third',kind='comment_reply',event_key='third',target_id='v'))
+            assert not denied[0] and 'minute' in denied[1]
+        finally:await runtime.close()
+    asyncio.run(run())

@@ -17,8 +17,15 @@ def positive_limit(value, default):
         return default
 
 
+def daily_limit(kind, value, default):
+    # Only an explicit zero for comment replies opts out of the daily ceiling.
+    if kind == 'reply' and not isinstance(value, bool) and (value == 0 or isinstance(value, str) and value.strip() == '0'):
+        return 0
+    return positive_limit(value, default)
+
+
 def effective_limits(config):
-    daily = {k:positive_limit(config.get('AUTONOMOUS_'+k.upper()+'_DAILY_LIMIT'),v) for k,v in LIMITS.items()}
+    daily = {k:daily_limit(k,config.get('AUTONOMOUS_'+k.upper()+'_DAILY_LIMIT'),v) for k,v in LIMITS.items()}
     social = {k:positive_limit(config.get('NATIVE_'+k.upper()),v) for k,v in SOCIAL_LIMITS.items()}
     social['comments_daily'] = positive_limit(config.get('PROACTIVE_COMMENT_DAILY_LIMIT'),social['comments_daily'])
     return daily, social
@@ -52,7 +59,7 @@ class Config(dict):
         # native defaults. Positive ceilings cannot silently become unlimited.
         for kind, ceiling in LIMITS.items():
             key = 'AUTONOMOUS_' + kind.upper() + '_DAILY_LIMIT'
-            defaults[key] = positive_limit(explicit.get(key), ceiling)
+            defaults[key] = daily_limit(kind, explicit.get(key), ceiling)
         for name, ceiling in SOCIAL_LIMITS.items():
             key = 'NATIVE_' + name.upper()
             defaults[key] = positive_limit(explicit.get(key), ceiling)
@@ -73,7 +80,7 @@ class Config(dict):
         self['VIDEO_VISION_PROVIDER_ID'] = 'hermes-vision'
         self['LLM_PROVIDER_ID'] = 'hermes'
         for kind, default in LIMITS.items():
-            ceiling = positive_limit(self.get('AUTONOMOUS_'+kind.upper()+'_DAILY_LIMIT'),default)
+            ceiling = daily_limit(kind,self.get('AUTONOMOUS_'+kind.upper()+'_DAILY_LIMIT'),default)
             prefix = 'AUTONOMOUS_' + kind.upper() + '_DAILY_'
             self[prefix+'MIN'] = 0
             self[prefix+'MAX'] = ceiling

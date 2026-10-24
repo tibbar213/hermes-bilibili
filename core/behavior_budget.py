@@ -85,13 +85,14 @@ class BehaviorBudget:
         global_daily = self._int("BEHAVIOR_GLOBAL_DAILY_LIMIT", 200)
         if global_minute:
             rules.append(("behavior:global:minute", minute_key, global_minute))
-        if global_daily:
+        unlimited_replies = kind == "comment_reply" and self._int("AUTONOMOUS_REPLY_DAILY_LIMIT", 80) == 0
+        if global_daily and not unlimited_replies:
             rules.append(("behavior:global:day", day_key, global_daily))
 
         if kind == "comment_reply":
             limit = self._int("AUTONOMOUS_REPLY_DAILY_LIMIT", 80)
-            if limit:
-                rules.append(("behavior:comment_reply:day", day_key, limit))
+            # Zero still records usage, without enforcing a daily cap.
+            rules.append(("behavior:comment_reply:day", day_key, limit))
         elif kind == "private_reply":
             limit = self._int("AUTONOMOUS_PRIVATE_DAILY_LIMIT", 30)
             if limit:
@@ -135,7 +136,7 @@ class BehaviorBudget:
                 (bucket, window_key),
             ).fetchone()
             used = float(row["count"] if row is not None else 0.0)
-            if used + 1 > limit:
+            if limit and used + 1 > limit:
                 return (
                     False,
                     f"budget_exhausted:{bucket}:{int(used)}/{limit}",

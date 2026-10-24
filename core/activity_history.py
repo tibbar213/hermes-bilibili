@@ -78,8 +78,8 @@ def daily_usage(data_dir, config, date):
         rules = budget.rules_for(SimpleNamespace(kind=kind, metadata={}), at)
         own = [(b, cap) for b, window, cap in rules if b == 'behavior:' + kind + ':day']
         used = counts.get('behavior:' + kind + ':day', 0)
-        cap = own[0][1] if own else None
+        cap = (own[0][1] or None) if own else None
         report[kind] = {'used': used, 'limit': cap, 'remaining': max(0, cap-used) if cap is not None else None}
     report['global'] = {'used': counts.get('behavior:global:day', 0),
                         'limit': budget._int('BEHAVIOR_GLOBAL_DAILY_LIMIT', 200) if config.get('BEHAVIOR_BUDGET_ENABLED', True) else None}
-    return {'date': date, 'usage': report, 'note': '计入预算的已确认及未确认操作；已退额的失败尝试不计入。浏览流水条数不等于已用看片额度。'}
+    return {'date': date, 'usage': report, 'note': '计入预算的已确认及未确认操作；已退额的失败尝试不计入。浏览流水条数不等于已用看片额度。评论回复设为每日不限时仍记录次数，但不占总日预算；每分钟限速保留。'}
