@@ -15,14 +15,15 @@ sys.modules[spec.name]=package
 spec.loader.exec_module(package)
 from hermes_bili_test.settings import Config
 
-def test_config_keeps_credentials_separate_and_reapplies_operator_limits(tmp_path):
+def test_config_keeps_credentials_separate_and_preserves_operator_limits(tmp_path):
     config=Config(tmp_path,{'SESSDATA':'dummy-session','ENABLE_LIVE_DANMAKU_REPLY':True,
         'PROACTIVE_COIN':True,'AUTONOMOUS_DYNAMIC_DAILY_LIMIT':99})
     config.save_config()
     public=json.loads(config.config_path.read_text())
     secret=json.loads(config.secret_path.read_text())
     assert 'SESSDATA' not in public and secret['SESSDATA']=='dummy-session'
-    assert public['AUTONOMOUS_DYNAMIC_DAILY_LIMIT']==1
+    assert public['AUTONOMOUS_DYNAMIC_DAILY_LIMIT']==99
+    assert public['DYNAMIC_DAILY_COUNT']==99
     assert public['AUTONOMOUS_PROACTIVE_DAILY_LIMIT']==24
     assert public['PROACTIVE_COMMENT_DAILY_LIMIT']==6
     assert public['AUTONOMOUS_REPLY_DAILY_LIMIT']==20
@@ -384,3 +385,64 @@ def test_inferred_video_response_is_not_rated_or_marked_seen():
     native._evaluate_video.assert_not_awaited()
     native._mark_video_seen.assert_not_awaited()
     native._save_json.assert_not_called()
+
+
+def test_native_limit_edits_survive_save_and_reload(tmp_path):
+    config=Config(tmp_path,{'AUTONOMOUS_PROACTIVE_DAILY_LIMIT':12,
+        'PROACTIVE_COMMENT_DAILY_LIMIT':3,'NATIVE_VIDEOS_PER_ROUND':2,
+        'NATIVE_QQ_PER_GROUP_DAILY':2,'NATIVE_QQ_COOLDOWN_SECONDS':1800})
+    config.save_config()
+    loaded=Config(tmp_path)
+    assert loaded['PROACTIVE_DAILY_LIMIT']==12
+    assert loaded['AUTONOMOUS_PROACTIVE_DAILY_MAX']==12
+    assert loaded['PROACTIVE_COMMENT_DAILY_LIMIT']==3
+    assert loaded['NATIVE_VIDEOS_PER_ROUND']==2
+    assert loaded['NATIVE_QQ_COOLDOWN_SECONDS']==1800
+    assert loaded['VIDEO_SUBTITLES_ONLY'] and loaded['BEHAVIOR_BUDGET_ENABLED']
+
+
+def test_reliable_video_returns_evidence_without_forced_rating_or_longterm_memory():
+    from hermes_bili_test.core.video import VideoMixin
+    from unittest.mock import Mock
+    async def analyze(info):
+        info['analysis_basis']='subtitles'
+        return '字幕内容分析'
+    native=SimpleNamespace(_get_video_oid=AsyncMock(return_value=1),
+        _get_video_info=AsyncMock(return_value={'bvid':'BVfixture','title':'量化'}),
+        _cached_video_memory=lambda bvid:None,_load_json=lambda *a:{},
+        _compact_video_cache=lambda c:False,
+        _analysis_has_subtitle_mismatch=VideoMixin._analysis_has_subtitle_mismatch,
+        _seen_video_record=AsyncMock(return_value=None),
+        _analyze_video_with_vision=analyze,_clip_media_text=VideoMixin._clip_media_text,
+        _evaluate_video=AsyncMock(side_effect=AssertionError('no forced rating')),
+        _save_self_memory_record=AsyncMock(side_effect=AssertionError('Agent chooses longterm facts')),
+        _mark_video_seen=AsyncMock(),_save_json=Mock())
+    result=asyncio.run(VideoMixin._watch_video_and_save_memory(native,'BVfixture'))
+    assert result['ok'] and '字幕内容分析' in result['message']
+    assert '个人评分' not in result['message']
+    native._evaluate_video.assert_not_awaited()
+    native._save_self_memory_record.assert_not_awaited()
+    native._mark_video_seen.assert_awaited_once()
+
+
+@pytest.mark.parametrize('score',[0,99])
+def test_native_reply_uses_persona_and_lets_agent_ignore_short_messages(monkeypatch,score):
+    from hermes_bili_test.core import reply
+    from unittest.mock import Mock
+    result={'decision':'ignore'}
+    monkeypatch.setattr(reply,'parse_reply_envelope',lambda *a,**k:result)
+    llm=AsyncMock(return_value='structured response')
+    native=SimpleNamespace(config={},_affection={'person':score},
+        _get_system_prompt=AsyncMock(return_value='Hermes persona'),_is_owner=lambda mid:False,
+        _get_level_prompts=Mock(side_effect=AssertionError('no score-tier personality')),
+        _sanitize_user_input=lambda *a:('哈哈',False,''),
+        _build_memory_context=AsyncMock(return_value=''),_relevant_feedback_context=AsyncMock(return_value=''),
+        _get_today_mood=lambda:('平静',''),_get_festival_prompt=lambda:'',
+        _get_personality_prompt=lambda *a:'',_wrap_user_content=lambda text:text,_llm_call=llm)
+    output=asyncio.run(reply.ReplyMixin._generate_reply(native,'哈哈','person','群友','thread',1,1,channel='private'))
+    assert output==result
+    llm.assert_awaited_once()
+    prompt=llm.call_args.args[0]
+    assert '哈哈' in prompt and '自行决定 reply、ignore 或 observe' in prompt
+    assert llm.call_args.kwargs['system_prompt']=='Hermes persona'
+    native._get_level_prompts.assert_not_called()

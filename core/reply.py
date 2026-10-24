@@ -69,30 +69,6 @@ class ReplyMixin(CommentContextMixin):
         limit = self._autonomous_limit_max(limit_kind) if hasattr(self, "_autonomous_limit_max") else max(0, int(self.config.get("AUTONOMOUS_PRIVATE_DAILY_LIMIT" if channel == "private" else "AUTONOMOUS_REPLY_DAILY_LIMIT", 0) or 0))
         return bool(limit and self._today_reply_count(channel) >= limit)
 
-    def _interaction_filter_reason(self, content, channel="comment"):
-        text = str(content or "").strip()
-        compact = self._normalized_interaction_text(text)
-        if not compact:
-            return "empty_or_symbol_only"
-        if self.config.get("FILTER_LOW_VALUE_MESSAGES", True):
-            low_value = {"顶", "路过", "来了", "打卡", "哈哈", "哈哈哈", "呵呵", "哦", "嗯", "6", "666", "1", "支持", "关注了"}
-            if compact in low_value or len(compact) <= 1:
-                return "low_value_message"
-            if re.fullmatch(r"(.)\1{3,}", compact):
-                return "repeated_character_spam"
-        if self.config.get("FILTER_AD_MESSAGES", True):
-            if self._matches_ad_pattern(text):
-                return "advertisement_or_contact_spam"
-        if self.config.get("FILTER_DUPLICATE_MESSAGES", True):
-            logs = self._load_json(REPLY_LOG_FILE, [])
-            for item in reversed(logs[-120:] if isinstance(logs, list) else []):
-                if not isinstance(item, dict):
-                    continue
-                same_channel = (item.get("channel") == "private") if channel == "private" else (item.get("channel") != "private")
-                if same_channel and self._normalized_interaction_text(item.get("content", "")) == compact:
-                    return "exact_duplicate_message"
-        return None
-
     def _allowed_bili_tool_names(self):
         supported = {
             "bili_up_info", "get_up_info", "bili_video_search", "search_bilibili",
@@ -108,30 +84,6 @@ class ReplyMixin(CommentContextMixin):
         # Backend-supported read-only tools are the absolute ceiling. AstrBot/QQ
         # commands, filesystem and shell tools are never reachable from B站 input.
         return supported & allowed if self.config.get("BILI_TOOL_ISOLATION_ENABLED", True) else supported
-
-    async def _should_reply_by_interest(self, content, username, channel="comment"):
-        if not self.config.get("ENABLE_INTEREST_BASED_REPLY", True):
-            return True, "interest_filter_disabled"
-        if channel == "private" and not self.config.get("INTEREST_APPLY_TO_PRIVATE", True):
-            return True, "private_interest_filter_disabled"
-        prompt = f"""判断一个B站角色是否值得回复下面这条{('私信' if channel == 'private' else '评论')}。
-只输出严格 JSON：{{"reply":true,"reason":"不超过30字"}}。
-选择规则：{str(self.config.get('INTEREST_SELECTION_PROMPT', ''))[:900]}
-用户：{str(username)[:40]}
-内容：{str(content)[:800]}
-不要因为礼貌就默认回复；低价值、广告、复读、无交流空间的内容应为 false。"""
-        try:
-            raw = str(await self._llm_call(prompt, max_tokens=120) or "").strip()
-            raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.I | re.S)
-            match = re.search(r"\{.*?\}", raw, re.S)
-            data = json.loads(match.group(0) if match else raw)
-            if isinstance(data, dict) and isinstance(data.get("reply"), bool):
-                return data["reply"], str(data.get("reason") or "模型兴趣判断")[:80]
-        except Exception as exc:
-            logger.debug(f"[BiliBot] 兴趣筛选解析失败，使用确定性回退：{exc}")
-        compact = self._normalized_interaction_text(content)
-        fallback = len(compact) >= 8 or bool(re.search(r"[?？]|怎么|为什么|觉得|喜欢|推荐|请问", str(content)))
-        return fallback, "deterministic_interest_fallback"
 
     def _comment_runtime_event(self, item):
         """把评论/@通知转换为统一事件，并计算跨入口优先级。"""
@@ -264,9 +216,6 @@ class ReplyMixin(CommentContextMixin):
             sp = await self._get_system_prompt()
             on = self.config.get("OWNER_NAME", "") or "主人"
             is_owner = self._is_owner(mid)
-            cs = self._affection.get(str(mid), 0)
-            lv = self._get_level(cs, mid)
-            lp = self._get_level_prompts()[lv]
             clean_content, is_suspicious, reason = self._sanitize_user_input(content, username, mid)
             # 图片识别文字同样来自用户，纳入同一套消毒与包裹，防止借图片文字注入。
             if image_desc:
@@ -408,7 +357,8 @@ class ReplyMixin(CommentContextMixin):
                 target_name = "评论"
             prompt = (
                 # ① 态度 / 场景 / 原则（背景设定）
-                f"【你的态度】{lp}{pps}\n\n"
+                f"沿用 Hermes 人格与真实对话记忆，自行判断关系和语气，不按分数套用亲密程度。{pps}\n"
+                "自行决定 reply、ignore 或 observe；简短招呼、玩梗、链接不自动等于垃圾消息。广告、复读或没有交流空间时可以不回复。\n"
                 f"{scene_prompt}\n"
                 f"【底线】对露骨色情、赌博、毒品、恶意引战或越界纠缠，简短拒绝或划清界限；普通夸奖和友善玩笑可以自然回应，不要误伤。\n"
                 f"【政治/敏感话题】遇到政治、时政、国家领导人、民族宗教、领土主权、社会争议等敏感话题：保持温和中立，绝不站队、绝不表态、绝不输出任何政治立场或价值判断。"
@@ -504,9 +454,6 @@ class ReplyMixin(CommentContextMixin):
                 mx = 99
                 # cold 等级和自动拉黑阈值依赖负分，因此不能把下限截到 0。
                 ns = max(-99, min(mx, cs + sd))
-                milestone_hit = self._peek_milestone(mid, cs, ns, username)
-                if milestone_hit:
-                    ai_reply = milestone_hit[1]
                 # 自动拉黑：白名单/主人 永不拉黑，阈值与次数可配，开关可关
                 auto_block = self.config.get("ENABLE_AUTO_BLOCK", True) and not self._is_block_whitelisted(mid)
                 block_score = int(self.config.get("AUTO_BLOCK_SCORE", -30))
@@ -791,44 +738,12 @@ class ReplyMixin(CommentContextMixin):
             logger.info(f"[BiliBot] 🔍 DEBUG comment_type={comment_type} oid={oid}")
             logger.info(f"[BiliBot] 📩 {username}（{LEVEL_NAMES[lv]}|{cs}分）：{content[:50]}")
 
-            # ── 管理员硬上限始终生效；兴趣/低价值筛选只对非必回对象生效 ──
-            high_aff = lv in ("friend", "close", "special")
+            # Durable event identity and operator ceilings stay in code; the Agent
+            # makes the conversational reply/ignore decision in its normal turn.
             content_emb = None
-            force_reply = (
-                self._is_owner(mid) or item.get("source") == "at"
-                or high_aff or self._is_reply_whitelisted(mid)
-            )
             if self._daily_reply_limit_reached("comment"):
-                self._log_security_event("daily_reply_limit", mid, username, content, "评论回复达到管理员硬上限")
                 await self.event_runtime.transition(claim.event_key, EventState.IGNORED, "daily_reply_limit")
                 return
-            if force_reply:
-                logger.info(f"[BiliBot] ✅ 必回（主人/@/高好感/白名单）：{username}")
-            else:
-                filter_reason = self._interaction_filter_reason(content, "comment")
-                if filter_reason:
-                    self._log_security_event("interaction_filtered", mid, username, content, filter_reason)
-                    logger.info(f"[BiliBot] 🧹 评论过滤：{username} ({filter_reason})")
-                    await self.event_runtime.transition(claim.event_key, EventState.IGNORED, filter_reason)
-                    return
-                interested, interest_reason = await self._should_reply_by_interest(content, username, "comment")
-                if not interested:
-                    self._log_security_event("interest_skip", mid, username, content, interest_reason)
-                    logger.info(f"[BiliBot] 兴趣筛选跳过：{username} ({interest_reason})")
-                    await self.event_runtime.transition(claim.event_key, EventState.IGNORED, "interest_skip")
-                    return
-                prob = max(0, min(100, int(self.config.get("REPLY_PROBABILITY_PERCENT", 100))))
-                roll = random.randint(1, 100)
-                if roll > prob:
-                    logger.info(f"[BiliBot] 🎲 概率跳过（掷{roll} > {prob}%）：{username}")
-                    await self.event_runtime.transition(claim.event_key, EventState.IGNORED, "probability_skip")
-                    return
-                if self.config.get("ENABLE_SIMILAR_SKIP", False):
-                    repeated, content_emb = await self._is_semantically_repeated(content)
-                    if repeated:
-                        self._log_security_event("similar_skip", mid, username, content, "语义相似去重")
-                        await self.event_runtime.transition(claim.event_key, EventState.IGNORED, "semantic_duplicate")
-                        return
 
             image_desc = ""
             image_urls = await self._get_comment_images(oid, rpid, comment_type)

@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from hermes_constants import get_hermes_home
 from hermes_cli.config import load_config_readonly
 from agent.memory_provider import spawn_context_thread
-from .settings import Config, LIMITS, SOCIAL_LIMITS
+from .settings import Config, LIMITS, SOCIAL_LIMITS, effective_limits
 from .context import NativeContext
 from .native_types import ContextWrapper
 
@@ -117,7 +117,7 @@ class Host:
             return {'source':source,'items':[],'reason':'login_required'}
         limit=max(1,min(12,int(args.get('limit',12))))
         rows=(await self.runtime._get_rcmd_videos() if source=='home'
-              else await self.runtime.get_following_updates(limit=20))
+              else await self.runtime.get_following_updates(limit=20,days=max(1,min(30,int(args.get('days',7))))))
         watched=await self.runtime._seen_video_bvids()
         result=[]
         selected=set()
@@ -129,12 +129,13 @@ class Host:
             if not re.fullmatch(r'BV[0-9A-Za-z]{10}',bvid) or bvid in selected:
                 continue
             selected.add(bvid)
-            if bvid in watched:
+            if bvid in watched and not args.get('include_seen',True):
                 filtered_seen+=1
                 continue
             result.append({'bvid':bvid,'title':text(row.get('title') if source=='home' else row.get('video_title'),200),
                 'description':text(row.get('desc') if source=='home' else row.get('text'),300),
-                'up_name':text(row.get('up_name'),80),'source':source,
+                'up_name':text(row.get('up_name'),80),'source':source,'seen':bvid in watched,
+                'published_at':row.get('published_at'),
                 'url':'https://www.bilibili.com/video/'+bvid})
             if len(result)>=limit:
                 break
@@ -229,7 +230,7 @@ class Host:
         action=args.get('action','status')
         if action=='status':
             return {'running':self.runtime._running,'credentials_present':self.runtime._has_cookie(),
-                    'limits':LIMITS,'social_limits':SOCIAL_LIMITS,'memory_backend':'hermes','reply_engine':'hermes_agent','scheduler':'hermes_cron','native_life_enabled':bool(self.runtime.config.get('NATIVE_LIFE_ENABLED')),'video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
+                    'limits':effective_limits(self.runtime.config)[0],'social_limits':effective_limits(self.runtime.config)[1],'memory_backend':'hermes','reply_engine':'hermes_agent','scheduler':'hermes_cron','native_life_enabled':bool(self.runtime.config.get('NATIVE_LIFE_ENABLED')),'video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
                     'live_room_id':self.runtime._live_room_id(),
                     'live_running':bool(self.runtime._live_danmaku_task and not self.runtime._live_danmaku_task.done()),'tools':[t.name for t in self.runtime.context.tools]}
         if action=='check':

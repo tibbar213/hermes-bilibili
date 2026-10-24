@@ -853,7 +853,7 @@ class BilibiliAPIMixin:
             logger.error(f"[BiliBot] 获取UP主动态失败: {e}")
             return []
 
-    async def get_following_updates(self, limit=20):
+    async def get_following_updates(self, limit=20, days=1):
         """获取关注列表的最新动态流（今日更新）"""
         try:
             try:
@@ -861,6 +861,7 @@ class BilibiliAPIMixin:
             except (TypeError, ValueError):
                 limit = 20
             limit = max(1, min(50, limit))
+            days = max(1, min(30, int(days)))
             d, _ = await self._http_get(
                 "https://api.bilibili.com/x/polymer/web-dynamic/v1/feed/all",
                 params={
@@ -892,8 +893,8 @@ class BilibiliAPIMixin:
                     except (OSError, OverflowError, ValueError):
                         logger.debug(f"[BiliBot] 已忽略异常动态时间戳: {raw_pub_ts!r}")
                         pub_date = today
-                    if pub_date != today:
-                        continue  # 只要今天的
+                    if pub_ts < datetime.now().timestamp() - days * 86400:
+                        continue
                 pub_time = author.get("pub_time", "")
                 up_name = author.get("name", "")
                 up_mid = str(author.get("mid", ""))
@@ -946,6 +947,7 @@ class BilibiliAPIMixin:
                     "video_bvid": video_bvid,
                     "live_title": live_title,
                     "pub_time": pub_time,
+                    "published_at": pub_ts,
                 })
             return results
         except Exception as e:

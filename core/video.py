@@ -198,9 +198,7 @@ class VideoMixin(VideoInspectionMixin):
                             "message": video_description or "这个视频没有可靠字幕，也没有足够资料推测内容；未标记为已观看"}
                 if analysis_info.get("_analysis_from_cache"):
                     return await self._watch_video_and_save_memory(actual_bvid, memory_source=memory_source)
-                evaluation = await self._evaluate_video(
-                    analysis_info, video_description
-                )
+                evaluation = {}  # Evidence only; the native Agent decides preferences and reactions.
                 score = (evaluation or {}).get("score")
                 score_reason = str((evaluation or {}).get("score_reason", ""))
                 mood = (evaluation or {}).get("mood", "平静")
@@ -237,21 +235,6 @@ class VideoMixin(VideoInspectionMixin):
                         actual_bvid, analysis_info, source=memory_source
                     )
 
-                if self.config.get("ENABLE_VIDEO_LONG_TERM_MEMORY", True):
-                    memory_text = (
-                        f"[{now_str}] 视频摘要《{vi.get('title', '')}》"
-                        f"(UP主:{vi.get('owner_name', '')}) 评分:{score}/10 "
-                        f"理由:{score_reason[:80]} 感想:{review[:80]} 内容:{video_description[:220]}"
-                    )
-                    if preference_signals:
-                        memory_text += " 兴趣信号:" + "、".join(
-                            f"{item.get('polarity')}:{item.get('value')}"
-                            for item in preference_signals[:5]
-                        )
-                    await self._save_self_memory_record(
-                        f"{memory_source}:{actual_bvid}", self._clip_media_text(memory_text, 520), memory_type="video",
-                        extra={"bvid": actual_bvid, "owner_mid": str(vi.get("owner_mid", "")), "owner_name": vi.get("owner_name", ""), "video_title": vi.get("title", ""), "tname": (evaluation or {}).get("partition") or vi.get("tname", ""), "score": score, "score_reason": score_reason, "mood": mood, "review": review, "preference_signals": preference_signals, "search_keywords": search_keywords, "analysis_basis": analysis_info.get("analysis_basis", "legacy"), "content_analyzed": analysis_info.get("analysis_basis") != "metadata"},
-                    )
                 logger.info(f"[BiliBot] ✅ 私信分享视频已看完并写入短期缓存：{actual_bvid}")
 
             link = f"https://www.bilibili.com/video/{actual_bvid}"
@@ -264,9 +247,7 @@ class VideoMixin(VideoInspectionMixin):
                 f"链接：{link}\n"
                 f"视频简介：{str(vi.get('desc', '') or '')[:150]}\n"
                 f"内容详情：{video_description[:800]}\n"
-                f"我的感受：{review[:200]}\n"
-                f"个人评分：{str(score) + '/10' if score is not None else '未取得可靠评分，未评分'} | 心情：{mood}\n"
-                f"评分理由：{score_reason}\n"
+                "喜好、感想及是否长期记住由你结合人格和内容自行判断。\n"
                 f"oid={oid}"
             )
             share_info = dict(vi)

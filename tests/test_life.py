@@ -234,7 +234,7 @@ def test_video_share_is_not_repeated_with_different_wording(tmp_path,monkeypatch
     assert native_life.reserve_group('g','another video',at=4000,bvid='BV0000000002')
 
 
-def test_video_share_targets_only_active_allowed_group_and_adds_link(tmp_path,monkeypatch):
+def test_video_share_requires_allowed_group_but_leaves_activity_decision_to_agent(tmp_path,monkeypatch):
     import time
     from tools import send_message_tool
     from hermes_life_test import native_life,life_security,host as native_host
@@ -255,8 +255,10 @@ def test_video_share_targets_only_active_allowed_group_and_adds_link(tmp_path,mo
         with pytest.raises(PermissionError):
             asyncio.run(native_life.act({'action':'qq_chat','group':'not-allowed','text':'no'}))
         (root/'group-activity.json').write_text('{}')
-        assert asyncio.run(native_life.act({'action':'qq_chat','group':'alias','text':'inactive'}))['skipped']
-        assert len(sent)==1
+        # No activity record must not be a separate policy gate. Cooldown still applies.
+        monkeypatch.setattr(native_life,'reserve_group',lambda *a,**k:True)
+        asyncio.run(native_life.act({'action':'qq_chat','group':'alias','text':'inactive'}))
+        assert len(sent)==2
     finally:
         session_context.clear_session_vars(tokens)
 
@@ -273,7 +275,7 @@ def test_video_feeds_are_metadata_only_and_filter_seen_duplicates_and_nonvideos(
     runtime=SimpleNamespace(config={'SESSDATA':'fixture'},_get_rcmd_videos=AsyncMock(return_value=raw),
         get_following_updates=AsyncMock(return_value=following),
         _seen_video_bvids=AsyncMock(return_value={'BV0000000001'}))
-    result=asyncio.run(Host.video_feed(SimpleNamespace(runtime=runtime),{'source':source}))
+    result=asyncio.run(Host.video_feed(SimpleNamespace(runtime=runtime),{'source':source,'include_seen':False}))
     assert [r['bvid'] for r in result['items']]==['BV0000000002']
     assert result['items'][0]['title']=='new & interesting'
     assert result['items'][0]['description']=='description'
@@ -326,3 +328,26 @@ def test_read_feed_dispatch_uses_readonly_host_operation(monkeypatch,action,sour
     monkeypatch.setattr(native_host,'handler',handler)
     assert native_life.read({'action':action})=='feed'
     assert captured==[('bili_feed',{'source':source})]
+
+
+def test_feed_seen_flag_and_lookback_are_agent_choices():
+    from unittest.mock import AsyncMock
+    from hermes_life_test.host import Host
+    runtime=SimpleNamespace(config={'SESSDATA':'fixture'},
+        get_following_updates=AsyncMock(return_value=[{'video_bvid':'BV0000000001','video_title':'known'}]),
+        _seen_video_bvids=AsyncMock(return_value={'BV0000000001'}))
+    result=asyncio.run(Host.video_feed(SimpleNamespace(runtime=runtime),{'source':'following','days':30}))
+    assert result['items'][0]['seen'] is True
+    runtime.get_following_updates.assert_awaited_once_with(limit=20,days=30)
+
+
+def test_custom_group_limits_are_durable(tmp_path,monkeypatch):
+    from hermes_life_test import native_life
+    from hermes_life_test.settings import Config
+    monkeypatch.setattr(native_life,'home',lambda:tmp_path)
+    config=Config(tmp_path,{'NATIVE_QQ_PER_GROUP_DAILY':2,'NATIVE_QQ_COOLDOWN_SECONDS':10})
+    config.save_config()
+    assert native_life.reserve_group('g','a',at=100)
+    assert not native_life.reserve_group('g','b',at=109)
+    assert native_life.reserve_group('g','b',at=110)
+    assert not native_life.reserve_group('g','c',at=120)

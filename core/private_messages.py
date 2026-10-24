@@ -1013,10 +1013,7 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                 new_score = 100
             else:
                 new_score = max(-99, min(99, current_score + score_delta))
-            # 只探测不落盘：发送失败时不能把里程碑标成已触发（否则以后再达标也不提示）
-            milestone_hit = self._peek_milestone(mid, current_score, new_score, username)
-            if milestone_hit:
-                ai_reply = milestone_hit[1]
+            milestone_hit = None  # Relationship statistics never replace the Agent reply.
         else:
             milestone_hit = None
             new_score = current_score
@@ -1369,17 +1366,6 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             self._log_security_event("daily_private_limit", mid, username, content, "私信回复达到管理员硬上限")
             await self.event_runtime.transition(claim.event_key, EventState.IGNORED, "daily_private_limit")
             return True
-        if message.get("content_type") == "text" and not self._is_owner(mid):
-            filter_reason = self._interaction_filter_reason(content, "private")
-            if filter_reason:
-                self._log_security_event("private_interaction_filtered", mid, username, content, filter_reason)
-                await self.event_runtime.transition(claim.event_key, EventState.IGNORED, filter_reason)
-                return True
-            interested, interest_reason = await self._should_reply_by_interest(content, username, "private")
-            if not interested:
-                self._log_security_event("private_interest_skip", mid, username, content, interest_reason)
-                await self.event_runtime.transition(claim.event_key, EventState.IGNORED, "interest_skip")
-                return True
         reply_content = content
         reference_context = ""
         allow_tool_request = message.get("content_type") == "text"

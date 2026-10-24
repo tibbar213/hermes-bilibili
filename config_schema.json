@@ -187,7 +187,7 @@
     "hint": "回完一条后至少等多久再处理下一条，防止连续刷屏。"
   },
   "REPLY_PROBABILITY_PERCENT": {
-    "description": "【回复】回复概率（%）",
+    "description": "【旧版兼容，原生回复不再使用】【回复】回复概率（%）",
     "type": "int",
     "default": 100,
     "hint": "普通评论按此概率随机回复，100=每条都回。主人/被@/高好感(熟人以上)/必回白名单 不受影响，永远回",
@@ -210,7 +210,7 @@
     }
   },
   "ENABLE_SIMILAR_SKIP": {
-    "description": "【回复】启用语义相似去重（相似评论不重复回复）",
+    "description": "【旧版兼容，原生回复不再使用】【回复】启用语义相似去重（相似评论不重复回复）",
     "type": "bool",
     "default": false,
     "hint": "需先配置好 Embedding（记忆设置里的 EMBED_*）。开启后，和最近回复过的评论语义高度相似的，直接跳过不回，防刷屏/复读。主人/@/高好感/白名单不受影响"
@@ -242,13 +242,13 @@
     "editor_theme": "vs-dark"
   },
   "ENABLE_INTEREST_BASED_REPLY": {
-    "description": "【回复筛选】让 Bot 只挑选自己感兴趣且值得回应的内容",
+    "description": "【旧版兼容，原生回复不再使用】【回复筛选】让 Bot 只挑选自己感兴趣且值得回应的内容",
     "type": "bool",
     "default": true,
     "hint": "先执行广告、低价值和重复内容过滤，再用轻量模型判断是否值得回复；主人、@和必回白名单仍优先。"
   },
   "INTEREST_SELECTION_PROMPT": {
-    "description": "【回复筛选】兴趣选择提示词",
+    "description": "【旧版兼容，原生回复不再使用】【回复筛选】兴趣选择提示词",
     "type": "text",
     "default": "优先回应有明确问题、真诚交流、有趣观点、与角色兴趣或近期经历相关的内容。忽略无意义灌水、机械复读、引流广告、单纯求关注和无法形成自然交流的内容。",
     "hint": "模型只输出是否值得回复的判断，不会直接生成评论回复。",
@@ -260,19 +260,19 @@
     "editor_theme": "vs-dark"
   },
   "FILTER_LOW_VALUE_MESSAGES": {
-    "description": "【回复筛选】过滤无意义或信息量过低的消息",
+    "description": "【旧版兼容，原生回复不再使用】【回复筛选】过滤无意义或信息量过低的消息",
     "type": "bool",
     "default": true,
     "hint": "丢掉「来了」「哈哈」这类没有信息量的评论，避免把话聊死。"
   },
   "FILTER_DUPLICATE_MESSAGES": {
-    "description": "【回复筛选】过滤近期完全重复的消息",
+    "description": "【旧版兼容，原生回复不再使用】【回复筛选】过滤近期完全重复的消息",
     "type": "bool",
     "default": true,
     "hint": "同一句话短时间重复出现时只回一次。"
   },
   "FILTER_AD_MESSAGES": {
-    "description": "【回复筛选】过滤广告、引流和联系方式轰炸",
+    "description": "【旧版兼容，原生回复不再使用】【回复筛选】过滤广告、引流和联系方式轰炸",
     "type": "bool",
     "default": true,
     "hint": "识别「+vx」「加群」等引流内容并跳过，不给广告当免费扩音器。"
@@ -376,7 +376,7 @@
     }
   },
   "INTEREST_APPLY_TO_PRIVATE": {
-    "description": "【回复筛选】私信也使用兴趣选择",
+    "description": "【旧版兼容，原生回复不再使用】【回复筛选】私信也使用兴趣选择",
     "type": "bool",
     "default": true,
     "hint": "主人私信和上下文重置指令不受兴趣选择影响，但仍受安全规则和每日硬上限保护。",
@@ -2518,5 +2518,23 @@
     "min": 0,
     "max": 200,
     "invisible": true
+  },
+  "NATIVE_VIDEOS_PER_ROUND": {
+    "description": "【原生生活额度】每轮最多读取几个新视频",
+    "type": "int",
+    "default": 3,
+    "hint": "正整数，由程序持久化强制执行；修改后重启网关生效"
+  },
+  "NATIVE_QQ_PER_GROUP_DAILY": {
+    "description": "【原生生活额度】每个授权群每天主动发言上限",
+    "type": "int",
+    "default": 4,
+    "hint": "正整数，由程序持久化强制执行；修改后重启网关生效"
+  },
+  "NATIVE_QQ_COOLDOWN_SECONDS": {
+    "description": "【原生生活额度】同群主动发言最短间隔秒数",
+    "type": "int",
+    "default": 3600,
+    "hint": "正整数，由程序持久化强制执行；修改后重启网关生效"
   }
 }
