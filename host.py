@@ -144,10 +144,10 @@ class Host:
             if not re.fullmatch(r'BV[0-9A-Za-z]{10}',bvid):
                 raise ValueError('Invalid BV ID')
             if await self.runtime._seen_video_record(bvid):
-                return await self.runtime._watch_video_and_save_memory(bvid)
+                return await self.runtime._watch_video_and_save_memory(bvid, memory_source='native_life')
             result={}
             async def watch():
-                value=await self.runtime._watch_video_and_save_memory(bvid)
+                value=await self.runtime._watch_video_and_save_memory(bvid, memory_source='native_life')
                 result.update(value)
                 return bool(value.get('ok'))
             outcome=await self.runtime.event_runtime.execute(ActionRequest(

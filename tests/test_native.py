@@ -285,3 +285,56 @@ def test_skipped_video_is_not_cached_or_marked_seen():
         _save_json=Mock(side_effect=AssertionError('skipped video must not be cached')))
     assert asyncio.run(VideoMixin._analyze_video_with_vision_impl(native,info)) is None
     native._save_json.assert_not_called()
+
+
+@pytest.mark.parametrize('decision,accepted', [
+    ({'relevant':True,'usable':True},True),
+    ({'relevant':True,'usable':False},False),
+    ({'relevant':False,'usable':True},False),
+    ({'relevant':True},False),
+])
+def test_subtitles_require_content_not_just_relevance(decision,accepted):
+    from hermes_bili_test.core.video import VideoMixin
+    llm=AsyncMock(return_value=json.dumps(decision))
+    native=SimpleNamespace(config={},_llm_call=llm,_repair_llm_json=lambda s:s)
+    text='这段对白讨论本地模型的内存占用以及量化部署的具体过程'
+    result=asyncio.run(VideoMixin._validate_video_subtitle(native,{},text))
+    assert bool(result) is accepted
+
+
+def test_music_only_is_rejected_without_model_call():
+    from hermes_bili_test.core.video import VideoMixin
+    native=SimpleNamespace(config={},_llm_call=AsyncMock())
+    assert asyncio.run(VideoMixin._validate_video_subtitle(native,{},'[背景音乐]\n♪ BGM ♪')) == ''
+    native._llm_call.assert_not_awaited()
+
+
+def test_summary_admitting_no_content_is_not_watched():
+    from hermes_bili_test.core.video import VideoMixin
+    native=SimpleNamespace(config={'VIDEO_SUBTITLES_ONLY':True},
+        _build_joint_context=AsyncMock(return_value={'subtitle':'候选字幕'}),
+        _analyze_video_text=AsyncMock(return_value='仅依据标题、简介和观众评论，尚未确认完整内容'),
+        _analyze_video_media=AsyncMock())
+    info={}
+    assert asyncio.run(VideoMixin._analyze_video_with_vision_inner(native,info)) is None
+    assert info['_subtitle_skipped'] and info['analysis_basis']=='metadata'
+    native._analyze_video_media.assert_not_awaited()
+
+
+@pytest.mark.parametrize('media', ['实际观察到的画面',None])
+def test_explicit_watch_can_try_media_but_never_metadata_fallback(media):
+    from hermes_bili_test.core.video import VideoMixin
+    native=SimpleNamespace(config={'VIDEO_SUBTITLES_ONLY':True},
+        _build_joint_context=AsyncMock(return_value={'subtitle':''}),
+        _should_use_visual_video_analysis=lambda joint:True,
+        _analyze_video_media=AsyncMock(return_value=media),
+        _merge_visual_and_joint=AsyncMock(return_value=media),
+        _clip_media_text=VideoMixin._clip_media_text,
+        _analyze_video_text=AsyncMock(side_effect=AssertionError('no metadata summary')))
+    info={'_allow_video_media':True}
+    result=asyncio.run(VideoMixin._analyze_video_with_vision_inner(native,info))
+    native._analyze_video_media.assert_awaited_once()
+    assert result==media
+    assert info['analysis_basis']==('video_media' if media else 'metadata')
+    if not media:
+        assert info['_subtitle_skipped']

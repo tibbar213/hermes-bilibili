@@ -96,11 +96,13 @@ class VideoMixin(VideoInspectionMixin):
             "字幕内容不符，需要先说明",
             "字幕似乎与视频内容无关",
             "字幕抓取时串了片源",
+            "仅依据标题", "仅基于标题", "尚未确认完整内容",
+            "无可靠对白", "未取得可靠内容",
         )
         return any(marker in text for marker in markers)
 
     async def _watch_video_and_save_memory(
-        self, video_id, memory_source="tool_watch", *, force_rewatch=False
+        self, video_id, memory_source="tool_watch", *, force_rewatch=False, allow_media=False
     ):
         """完整分析一个 BV/av 视频并写入统一视频记忆，供工具和私信共用。"""
         raw_id = str(video_id or "").strip()
@@ -131,6 +133,7 @@ class VideoMixin(VideoInspectionMixin):
                 "pic": vi.get("pic", ""),
                 "cid": vi.get("cid", 0),
                 "oid": oid,
+                "_allow_video_media": bool(allow_media),
             }
 
             if not force_rewatch:
@@ -165,7 +168,7 @@ class VideoMixin(VideoInspectionMixin):
                 logger.info(f"[BiliBot] 📹 私信看片命中视频短期缓存/摘要索引：《{vi.get('title', '')}》")
             else:
                 seen_trace = await self._seen_video_record(actual_bvid)
-                if seen_trace and not force_rewatch and not preview_only:
+                if seen_trace and not force_rewatch and not preview_only and not removed_bad_cache:
                     link = f"https://www.bilibili.com/video/{actual_bvid}"
                     title = vi.get("title", "") or seen_trace.get("title", "")
                     owner_name = vi.get("owner_name", "") or seen_trace.get("owner_name", "")
@@ -192,9 +195,10 @@ class VideoMixin(VideoInspectionMixin):
                 )
                 if analysis_info.get("_subtitle_skipped"):
                     return {"ok": False, "skipped": True, "bvid": actual_bvid,
-                            "message": "这个视频没有可用字幕，已跳过"}
+                            "message": ("这个视频没有可靠字幕，视频内容也未能读取；未标记为已观看"
+                                        if allow_media else "这个视频没有可靠字幕，已跳过，未标记为已观看")}
                 if analysis_info.get("_analysis_from_cache"):
-                    return await self._watch_video_and_save_memory(actual_bvid, memory_source=memory_source)
+                    return await self._watch_video_and_save_memory(actual_bvid, memory_source=memory_source, allow_media=allow_media)
                 evaluation = await self._evaluate_video(
                     analysis_info, video_description
                 )
@@ -301,15 +305,19 @@ class VideoMixin(VideoInspectionMixin):
 
     # ── 联合上下文（字幕+热评统一构建，所有分析路径共用） ──
     async def _validate_video_subtitle(self, video_info, subtitle_text, extra=""):
-        """只在字幕明显属于别的视频时拒绝；不确定时保留，避免误伤正常字幕。"""
+        """Require relevant, substantive subtitles; music/credits are not video evidence."""
         if not subtitle_text:
+            return ""
+        substantive = re.sub(r"[\[【（(].*?[\]】）)]", "", subtitle_text, flags=re.DOTALL)
+        substantive = re.sub(r"背景音乐|纯音乐|伴奏|音乐|BGM|music|[\W\d_]", "", substantive, flags=re.I)
+        if len(substantive) < 12:
             return ""
         prompt = f"""你是视频字幕归属校验器。判断下面的候选字幕是否明显不属于这个视频。
 
 判断原则：
-- 只有主题、人物或事件明显完全冲突时判 false。
-- 音乐、混剪、玩梗、反差内容或信息不足时判 true，宁可保留。
-- 不要概括视频，只输出 JSON：{{"relevant": true或false, "reason": "15字以内原因"}}
+- relevant：主题、人物或事件是否与视频相符，明显冲突时为 false。
+- usable：是否包含足以理解视频实际内容的对白、歌词或实质叙述。只有背景音乐标记、片头片尾、署名、广告或无关碎片时为 false。不能以简介或评论替字幕补正文。
+- 信息不足无法确认时 usable 为 false；不要概括视频，只输出 JSON：{{"relevant": true或false, "usable": true或false, "reason": "15字以内原因"}}
 
 视频标题：{video_info.get('title', '')}
 视频简介：{str(video_info.get('desc', '') or '')[:350]}
@@ -319,18 +327,19 @@ class VideoMixin(VideoInspectionMixin):
         try:
             result = await getattr(self, "_summary_llm_call", self._llm_call)(prompt, max_tokens=100)
             if not result:
-                return subtitle_text
+                return ""
             cleaned = self._repair_llm_json(result)
             match = re.search(r"\{.*\}", cleaned, re.DOTALL)
             decision = json.loads(match.group() if match else cleaned)
-            if decision.get("relevant") is False:
+            if decision.get("relevant") is not True or decision.get("usable") is not True:
                 logger.warning(
                     f"[BiliBot] 已忽略疑似错配字幕: bvid={video_info.get('bvid', '')} "
                     f"reason={str(decision.get('reason', '主题明显不符'))[:40]}"
                 )
                 return ""
         except Exception as exc:
-            logger.debug(f"[BiliBot] 字幕归属校验失败，交由最终分析兜底: {exc}")
+            logger.debug(f"[BiliBot] 字幕有效性校验未完成: {type(exc).__name__}")
+            return ""
         return subtitle_text
 
     async def _build_joint_context(self, video_info):
@@ -533,23 +542,35 @@ class VideoMixin(VideoInspectionMixin):
         joint = await self._build_joint_context(video_info)
         if not joint.get("subtitle"):
             media_failure(video_info, "subtitles", "没有取得可用字幕（无字幕、获取失败或归属校验不通过）", self.config)
-        if self.config.get("VIDEO_SUBTITLES_ONLY", False):
+        if self.config.get("VIDEO_SUBTITLES_ONLY", False) and not video_info.get("_allow_video_media"):
             if not joint.get("subtitle"):
                 video_info["_subtitle_skipped"] = True
                 video_info["analysis_basis"] = "metadata"
                 return None
             video_info["analysis_basis"] = "subtitles"
-            return await self._analyze_video_text(video_info, joint=joint)
+            text = await self._analyze_video_text(video_info, joint=joint)
+            if not text or VideoMixin._analysis_has_subtitle_mismatch(text):
+                video_info.update(analysis_basis="metadata", _subtitle_skipped=True)
+                return None
+            return text
+        if joint.get("subtitle"):
+            video_info["analysis_basis"] = "subtitles"
+            text = await self._analyze_video_text(video_info, joint=joint)
+            if text and not VideoMixin._analysis_has_subtitle_mismatch(text):
+                return text
+            joint["subtitle"] = ""
         media_result = await self._analyze_video_media(video_info) if self._should_use_visual_video_analysis(joint) else None
         if media_result:
             video_info["analysis_basis"] = "video_media"
             merged = await self._merge_visual_and_joint(video_info, media_result, joint)
             content = self._clip_media_text(merged or media_result, 1600)
+            if video_info.get("_visual_frames_only"):
+                content = "【仅分析抽样画面，不含音频，不能确认完整视频内容】" + content
             if media_result.startswith("【仅分析部分") and not content.startswith("【仅分析部分"):
                 content = "【仅分析部分视频片段，不能确认全部内容】" + content
             return content
-        video_info["analysis_basis"] = "subtitles" if joint.get("subtitle") else "metadata"
-        return await self._analyze_video_text(video_info, joint=joint)
+        video_info.update(analysis_basis="metadata", _subtitle_skipped=True)
+        return None
 
     async def _analyze_video_text(self, video_info, joint=None):
         joint = joint or await self._build_joint_context(video_info)
@@ -566,16 +587,18 @@ UP主：{video_info.get('up_name') or video_info.get('owner_name', '未知')}
 {joint['joint_hint']}
 直接输出概括内容，不要加前缀。"""
         result = await getattr(self, "_summary_llm_call", self._llm_call)(prompt, max_tokens=900)
-        fallback = f"视频《{video_info.get('title', '未知')}》，UP主：{video_info.get('up_name') or video_info.get('owner_name', '未知')}"
         if not result:
-            media_failure(video_info, "summary", get_call_diagnostic().get("reason") or "总结模型返回空内容，使用标题兜底", self.config)
-        return self._clip_media_text(result or fallback, 1600)
+            media_failure(video_info, "summary", get_call_diagnostic().get("reason") or "总结模型返回空内容", self.config)
+            return None
+        return self._clip_media_text(result, 1600)
 
     async def _analyze_video_media(self, video_info):
-        if self.config.get("VIDEO_SUBTITLES_ONLY", False):
+        if self.config.get("VIDEO_SUBTITLES_ONLY", False) and not video_info.get("_allow_video_media"):
             return None
         set_call_diagnostic()
         provider_id = self.config.get("VIDEO_VISION_PROVIDER_ID", "")
+        if not provider_id and video_info.get("_allow_video_media"):
+            provider_id = "hermes-vision"
         client = self._get_video_vision_client()
         model = self.config.get("VIDEO_VISION_MODEL", "")
         if not provider_id and (not client or not model):
@@ -745,6 +768,7 @@ UP主：{video_info.get('up_name') or video_info.get('owner_name', '未知')}
             if not frames:
                 media_failure(video_info, "frames", "没有提取到视频画面", self.config)
                 return None
+            video_info["_visual_frames_only"] = True
             frame_content = []
             for frame_path in frames:
                 with open(frame_path, "rb") as f:

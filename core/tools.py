@@ -368,9 +368,9 @@ def create_tools(plugin):
             parts.append(f"（UID={mid}，如需关注可调用 bili_action(action=follow)）")
             return "\n\n".join(parts)
 
-    async def _watch_video_for_tool(bvid, *, force_rewatch=False):
+    async def _watch_video_for_tool(bvid, *, force_rewatch=False, allow_media=False):
         result = await plugin._watch_video_and_save_memory(
-            bvid, memory_source="tool_watch", force_rewatch=force_rewatch
+            bvid, memory_source="tool_watch", force_rewatch=force_rewatch, allow_media=allow_media
         )
         if result.get("ok"):
             result["message"] += (
@@ -381,12 +381,13 @@ def create_tools(plugin):
     @dataclass
     class WatchVideoTool(FunctionTool[AstrAgentContext]):
         name: str = "watch_video"
-        description: str = "Read watched video memories first; analyze and save a new Bilibili video once. Rewatch only on an explicit administrator request. Can then use interaction tools."
+        description: str = "Read video memories first, otherwise read reliable subtitles. Only when the user explicitly asks to watch a specific video, set allow_media=true to try video/frames if subtitles are unavailable. Autonomous browsing must leave it false. Failed reading is not watched. Rewatch only on an explicit administrator request."
         parameters: dict = Field(default_factory=lambda: {
             "type": "object",
             "properties": {
                 "bvid": {"type": "string", "description": "BV ID, e.g. BV1xx411x7xx"},
                 "force_rewatch": {"type": "boolean", "default": False, "description": "Only true when administrator explicitly says to rewatch. Repeated links/questions use memories."},
+                "allow_media": {"type": "boolean", "default": False, "description": "True only for an explicit user request to watch this specific video; permits video/frames fallback, not autonomous browsing or bare link previews."},
             },
             "required": ["bvid"],
         })
@@ -401,7 +402,8 @@ def create_tools(plugin):
                     force = bool(event.is_admin()) and bool(re.search(r"重新\s*看|重看", text))
                 except Exception:
                     force = False
-            result = await _watch_video_for_tool(kwargs.get("bvid", ""), force_rewatch=force)
+            result = await _watch_video_for_tool(kwargs.get("bvid", ""), force_rewatch=force,
+                                               allow_media=kwargs.get("allow_media") is True)
             return result["message"]
 
     @dataclass
@@ -448,7 +450,7 @@ def create_tools(plugin):
                 if remaining > 0:
                     return f"⚠️ 该视频刚刚已分享，约 {int(remaining) + 1} 秒后才能再次测试。"
 
-                result = await _watch_video_for_tool(requested_bvid)
+                result = await _watch_video_for_tool(requested_bvid, allow_media=True)
                 if not result["ok"]:
                     return result["message"]
                 share_bucket = int(time.time() // max(1, cooldown or 1))

@@ -678,6 +678,7 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                     match.group(1),
                     memory_source="private_tool",
                     force_rewatch=force_rewatch,
+                    allow_media=True,
                 )
                 if result.get("ok"):
                     return str(result.get("message") or "已完成视频读取。")
