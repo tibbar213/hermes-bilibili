@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 
 SECRET_NAMES = {'SESSDATA','BILI_JCT','DEDE_USER_ID','REFRESH_TOKEN','BUVID3','BUVID4'}
-LIMITS = {'reply':20, 'private':20, 'dynamic':1, 'proactive':3}
+LIMITS = {'reply':20, 'private':20, 'dynamic':1, 'proactive':24}
+SOCIAL_LIMITS = {'videos_per_round':3, 'comments_daily':6, 'qq_per_group_daily':4, 'qq_cooldown_seconds':3600}
 
 def _write_private(path, data):
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -50,8 +51,8 @@ class Config(dict):
             self[prefix+'MIN'] = 0
             self[prefix+'MAX'] = ceiling
             self[prefix+'LIMIT'] = ceiling
-        self['PROACTIVE_DAILY_LIMIT'] = 3
-        self['PROACTIVE_COMMENT_DAILY_LIMIT'] = 3
+        self['PROACTIVE_DAILY_LIMIT'] = LIMITS['proactive']
+        self['PROACTIVE_COMMENT_DAILY_LIMIT'] = SOCIAL_LIMITS['comments_daily']
 
     def save_config(self):
         self.enforce_limits()

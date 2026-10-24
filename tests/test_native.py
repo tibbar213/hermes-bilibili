@@ -23,7 +23,8 @@ def test_config_keeps_credentials_separate_and_reapplies_operator_limits(tmp_pat
     secret=json.loads(config.secret_path.read_text())
     assert 'SESSDATA' not in public and secret['SESSDATA']=='dummy-session'
     assert public['AUTONOMOUS_DYNAMIC_DAILY_LIMIT']==1
-    assert public['AUTONOMOUS_PROACTIVE_DAILY_LIMIT']==3
+    assert public['AUTONOMOUS_PROACTIVE_DAILY_LIMIT']==24
+    assert public['PROACTIVE_COMMENT_DAILY_LIMIT']==6
     assert public['AUTONOMOUS_REPLY_DAILY_LIMIT']==20
     assert public['AUTONOMOUS_PRIVATE_DAILY_LIMIT']==20
     assert public['ENABLE_LIVE_DANMAKU_REPLY'] and not public['PROACTIVE_COIN']

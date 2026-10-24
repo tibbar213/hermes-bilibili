@@ -13,7 +13,7 @@ from types import SimpleNamespace
 from hermes_constants import get_hermes_home
 from hermes_cli.config import load_config_readonly
 from agent.memory_provider import spawn_context_thread
-from .settings import Config, LIMITS
+from .settings import Config, LIMITS, SOCIAL_LIMITS
 from .context import NativeContext
 from .native_types import ContextWrapper
 
@@ -117,6 +117,36 @@ class Host:
             return {'saved':bool(saved),'backend':'hermes'}
         if action=='maintain':
             return {'result':await self.runtime._consolidation.run_daily()}
+        if action=='comment':
+            if not self.runtime.config.get('PROACTIVE_COMMENT',False):
+                return {'skipped':True,'reason':'主动评论未启用'}
+            import re
+            from .core.runtime import ActionRequest
+            from .core.config import BILI_REPLY_URL
+            from .core.security.redact import contains_credentials,redact_outbound
+            bvid=str(args.get('bvid') or '').strip()
+            text=str(args.get('text') or '').strip()
+            if not re.fullmatch(r'BV[0-9A-Za-z]{10}',bvid) or not text or len(text)>500 or contains_credentials(text):
+                raise ValueError('Invalid video comment')
+            text=redact_outbound(text,internal=False)[0]
+            oid=await self.runtime._get_video_oid(bvid)
+            if not oid:
+                return {'skipped':True,'reason':'视频不存在或信息不可读'}
+            async def send():
+                try:
+                    payload,_=await self.runtime._http_post(BILI_REPLY_URL,
+                        data={'oid':int(oid),'type':1,'message':text,'csrf':self.runtime.config.get('BILI_JCT','')},retries=0)
+                    if not isinstance(payload,dict) or 'code' not in payload:
+                        raise ValueError('Missing result')
+                except Exception as exc:
+                    raise TimeoutError('评论发送结果未确认，不自动重发') from exc
+                return payload['code']==0
+            outcome=await self.runtime.event_runtime.execute(ActionRequest(
+                key='native_life_comment:'+bvid,kind='proactive_comment',
+                event_key='native_life_comment:'+bvid,target_id=str(oid)),send)
+            return {'sent':bool(outcome.success and not outcome.duplicate),
+                    'already_sent':bool(outcome.success and outcome.duplicate),
+                    'duplicate':bool(outcome.duplicate),'state':outcome.state,'reason':outcome.reason}
         if action=='dynamic':
             if not self.runtime.config.get('ENABLE_DYNAMIC',False):
                 return {'skipped':True,'reason':'自主动态未启用'}
@@ -152,7 +182,8 @@ class Host:
                 return bool(value.get('ok'))
             outcome=await self.runtime.event_runtime.execute(ActionRequest(
                 key='native_watch:'+datetime.now().strftime('%Y-%m-%d')+':'+bvid,
-                kind='proactive_watch',event_key='native_life_watch:'+bvid,target_id=bvid),watch)
+                kind='proactive_watch',event_key='native_life_watch:'+bvid,target_id=bvid,
+                metadata={'native_round':str(args.get('_native_round') or '')}),watch)
             return result or {'skipped':True,'reason':outcome.reason}
         raise ValueError('Unknown native life action')
 
@@ -160,7 +191,7 @@ class Host:
         action=args.get('action','status')
         if action=='status':
             return {'running':self.runtime._running,'credentials_present':self.runtime._has_cookie(),
-                    'limits':LIMITS,'memory_backend':'hermes','reply_engine':'hermes_agent','scheduler':'hermes_cron','native_life_enabled':bool(self.runtime.config.get('NATIVE_LIFE_ENABLED')),'video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
+                    'limits':LIMITS,'social_limits':SOCIAL_LIMITS,'memory_backend':'hermes','reply_engine':'hermes_agent','scheduler':'hermes_cron','native_life_enabled':bool(self.runtime.config.get('NATIVE_LIFE_ENABLED')),'video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
                     'live_room_id':self.runtime._live_room_id(),
                     'live_running':bool(self.runtime._live_danmaku_task and not self.runtime._live_danmaku_task.done()),'tools':[t.name for t in self.runtime.context.tools]}
         if action=='check':

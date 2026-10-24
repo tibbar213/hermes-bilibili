@@ -113,6 +113,9 @@ class BehaviorBudget:
             limit = self._int("PROACTIVE_DAILY_LIMIT", 0)
             if limit:
                 rules.append(("behavior:proactive_watch:day", day_key, limit))
+            if metadata.get('native_round'):
+                from ..settings import SOCIAL_LIMITS
+                rules.append(('behavior:proactive_watch:round',str(metadata['native_round']),SOCIAL_LIMITS['videos_per_round']))
         elif kind == "proactive_comment":
             limit = self._int("PROACTIVE_COMMENT_DAILY_LIMIT", 2)
             if limit:

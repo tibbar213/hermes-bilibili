@@ -34,6 +34,8 @@ def guard(tool_name, args, **kwargs):
     restricted_job = bool(life or (execution and getattr(execution,'job_name','') in {'fish-life','fish-home-maintenance'}))
     if not external and not restricted_job:
         return None
+    if restricted_job and tool_name == 'watch_video':
+        return {'action':'block','message':'自主看片请用 fish_life(action=watch)，统一计入本轮与全天额度。'}
     allowed = READ_TOOLS if external else LIFE_TOOLS
     if tool_name not in allowed:
         return {'action': 'block', 'message': '外部交流与自主上网没有服务器钥匙；只能使用已开放的阅读/社交能力。服务器操作须由主人另行授权。'}
