@@ -9,6 +9,7 @@ from .settings import LIMITS, SOCIAL_LIMITS
 JOB_NAMES = {'life':'fish-life', 'maintenance':'fish-home-maintenance'}
 LIFE_PROMPT = f'''这是你的自主生活时间，不是别人委托的服务器任务。沿用 SOUL.md 和共同记忆，自然地生活。
 先调用 fish_read(action=state)。可以搜索互联网、找感兴趣的B站视频并读取可靠字幕。不下载视频、不抽帧。无可靠字幕时可根据标题、简介、弹幕和评论推测，但必须明确是观众说法或推测，不能声称看过视频、核实视频结论，也不能把推测记成已观看的经历或长期事实。
+选片有三个来源：fish_read(action=home_feed) 获取当前登录账号的首页推荐，fish_read(action=following_feed) 获取关注UP今天更新的视频，fish_read(action=bilibili,query=...) 主动搜索。每轮先看看首页推荐和关注更新，结合自己的兴趣、共同记忆、标题及简介挑片；不要只追热度或固定一个关键词。候选已经过滤看过的视频，标题/简介不是视频正文；没有合适的再搜索，接口不可用或候选为空就换来源，不要反复空刷或编造推荐。来源无需机械平均分配，也不用凑满三个视频。
 自行决定是否看、看什么，不为完成指标凑数。新看B站视频必须调用 fish_life(action=watch,bvid=...)，每轮最多{SOCIAL_LIMITS['videos_per_round']}个、全天最多{LIMITS['proactive']}个。不要用其他看片工具绕过额度。
 发现有趣的内容，可以通过 fish_life(action=comment,bvid=...,text=...) 在该视频下自然评论，每天最多{SOCIAL_LIMITS['comments_daily']}条，同一视频不重复评论。不为了刷存在感说套话；没有可靠字幕时只讨论明确注明来源的观众说法或提出问题，不冒充看过正文，也不替视频下确定结论。
 有真实的新体验时可通过 fish_life(action=dynamic,text=...) 发一条B站动态，每天最多1条。
@@ -85,6 +86,9 @@ def observe_group_activity(platform='', **kwargs):
 
 def read(args, **kwargs):
     action = args.get('action','state')
+    if action in {'home_feed','following_feed'}:
+        from .host import handler
+        return handler('bili_feed')({'source':'home' if action=='home_feed' else 'following'})
     if action == 'web':
         from tools.web_tools import web_search_tool
         return web_search_tool(str(args.get('query') or '')[:500],limit=3)
@@ -181,8 +185,8 @@ def handle(args, **kwargs):
 def register(ctx):
     ctx.register_hook('pre_llm_call',observe_group_activity)
     ctx.register_tool(name='fish_read',toolset='fish_read',handler=read,
-        schema={'name':'fish_read','description':'阅读公开互联网/B站，或查看自己的原生任务、已授权群的活动状态。',
-                'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['state','web','bilibili']},'query':{'type':'string'}},'required':['action']}})
+        schema={'name':'fish_read','description':'阅读公开互联网/B站：home_feed 看登录账号首页推荐，following_feed 看关注UP今天的视频更新，bilibili 按query搜索，state 查看自己的任务和授权群活动状态。候选标题不是已观看正文。',
+                'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['state','web','bilibili','home_feed','following_feed']},'query':{'type':'string'}},'required':['action']}})
     ctx.register_tool(name='fish_life',toolset='fish_life',handler=handle,
         schema={'name':'fish_life','description':'仅自己的原生生活任务或真实主人：watch读视频字幕；comment在指定视频下评论；dynamic发动态；qq_chat在活跃白名单群自然聊天或分享视频；maintain维护缓存；remember记录新事实。没有服务器操作权限。',
                 'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['watch','comment','dynamic','qq_chat','maintain','remember']},

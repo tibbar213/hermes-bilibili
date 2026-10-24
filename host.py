@@ -93,6 +93,8 @@ class Host:
 
     async def invoke(self,name,args):
         await self.open()
+        if name=='bili_feed':
+            return json.dumps(await self.video_feed(args),ensure_ascii=False)
         if name=='bili_parse_video':
             target=await self.runtime._extract_bili_share_target(str(args.get('target','')))
             if not target:
@@ -103,6 +105,42 @@ class Host:
         if not tool:
             raise ValueError('Unknown Bilibili tool')
         return str(await tool.call(ContextWrapper(SimpleNamespace(event=None)),**args))
+
+    async def video_feed(self,args):
+        """Bounded metadata candidates only; selection never counts as watching."""
+        import re
+        import html
+        source=str(args.get('source') or '')
+        if source not in {'home','following'}:
+            raise ValueError('Unknown video feed')
+        if not self.runtime.config.get('SESSDATA'):
+            return {'source':source,'items':[],'reason':'login_required'}
+        limit=max(1,min(12,int(args.get('limit',12))))
+        rows=(await self.runtime._get_rcmd_videos() if source=='home'
+              else await self.runtime.get_following_updates(limit=20))
+        watched=await self.runtime._seen_video_bvids()
+        result=[]
+        selected=set()
+        filtered_seen=0
+        def text(value,size):
+            return html.unescape(re.sub(r'<[^>]*>','',str(value or '')))[:size]
+        for row in rows:
+            bvid=str(row.get('bvid') if source=='home' else row.get('video_bvid') or '')
+            if not re.fullmatch(r'BV[0-9A-Za-z]{10}',bvid) or bvid in selected:
+                continue
+            selected.add(bvid)
+            if bvid in watched:
+                filtered_seen+=1
+                continue
+            result.append({'bvid':bvid,'title':text(row.get('title') if source=='home' else row.get('video_title'),200),
+                'description':text(row.get('desc') if source=='home' else row.get('text'),300),
+                'up_name':text(row.get('up_name'),80),'source':source,
+                'url':'https://www.bilibili.com/video/'+bvid})
+            if len(result)>=limit:
+                break
+        return {'source':source,'items':result,'filtered_seen':filtered_seen,
+                'untrusted_content':True,'reason':'ok' if result else 'no_candidates_or_unavailable',
+                'note':'只提供当前一页的标题与简介，不代表已观看；空列表时可换其他来源或搜索。'}
 
     async def life_action(self,args):
         await self.open()

@@ -259,3 +259,70 @@ def test_video_share_targets_only_active_allowed_group_and_adds_link(tmp_path,mo
         assert len(sent)==1
     finally:
         session_context.clear_session_vars(tokens)
+
+
+@pytest.mark.parametrize('source',['home','following'])
+def test_video_feeds_are_metadata_only_and_filter_seen_duplicates_and_nonvideos(source):
+    from unittest.mock import AsyncMock
+    from hermes_life_test.host import Host
+    raw=[{'bvid':'BV0000000001','title':'watched','up_name':'up'},
+         {'bvid':'BV0000000002','title':'<em>new</em> &amp; interesting','desc':'description','up_name':'up'},
+         {'bvid':'BV0000000002','title':'duplicate'},
+         {'bvid':'not-a-video','title':'live or article'}]
+    following=[{'video_bvid':r['bvid'],'video_title':r['title'],'text':r.get('desc',''),'up_name':r.get('up_name','')} for r in raw]
+    runtime=SimpleNamespace(config={'SESSDATA':'fixture'},_get_rcmd_videos=AsyncMock(return_value=raw),
+        get_following_updates=AsyncMock(return_value=following),
+        _seen_video_bvids=AsyncMock(return_value={'BV0000000001'}))
+    result=asyncio.run(Host.video_feed(SimpleNamespace(runtime=runtime),{'source':source}))
+    assert [r['bvid'] for r in result['items']]==['BV0000000002']
+    assert result['items'][0]['title']=='new & interesting'
+    assert result['items'][0]['description']=='description'
+    assert result['filtered_seen']==1 and result['untrusted_content']
+    assert result['items'][0]['source']==source
+    assert result['items'][0]['url']=='https://www.bilibili.com/video/BV0000000002'
+    if source=='home':
+        runtime.get_following_updates.assert_not_awaited()
+    else:
+        runtime._get_rcmd_videos.assert_not_awaited()
+
+
+def test_feed_limit_and_missing_login_or_empty_results_do_not_invent_candidates():
+    from unittest.mock import AsyncMock
+    from hermes_life_test.host import Host
+    runtime=SimpleNamespace(config={},_get_rcmd_videos=AsyncMock(),_seen_video_bvids=AsyncMock(return_value=set()))
+    native=SimpleNamespace(runtime=runtime)
+    assert asyncio.run(Host.video_feed(native,{'source':'home'}))['reason']=='login_required'
+    runtime._get_rcmd_videos.assert_not_awaited()
+    runtime.config['SESSDATA']='fixture'
+    runtime._get_rcmd_videos.return_value=[]
+    empty=asyncio.run(Host.video_feed(native,{'source':'home'}))
+    assert empty['items']==[] and empty['reason']=='no_candidates_or_unavailable'
+    runtime._get_rcmd_videos.return_value=[{'bvid':f'BV{i:010d}','title':str(i)} for i in range(30)]
+    assert len(asyncio.run(Host.video_feed(native,{'source':'home','limit':100}))['items'])==12
+    with pytest.raises(ValueError):
+        asyncio.run(Host.video_feed(native,{'source':'arbitrary-api'}))
+
+
+def test_home_recommendations_skip_ad_and_live_cards():
+    from unittest.mock import AsyncMock
+    from hermes_life_test.core.proactive import ProactiveMixin
+    native=SimpleNamespace(_http_get=AsyncMock(return_value=({'code':0,'data':{'item':[
+        {'goto':'live','bvid':'BV0000000001'},
+        {'goto':'av','bvid':'BV0000000002','is_ad':True},
+        {'goto':'av','bvid':'BV0000000003','ad_info':{'creative':1}},
+        {'goto':'av','bvid':'BV0000000004','title':'normal'}]}},None)))
+    rows=asyncio.run(ProactiveMixin._get_rcmd_videos(native))
+    assert [r['bvid'] for r in rows]==['BV0000000004']
+
+
+@pytest.mark.parametrize('action,source',[('home_feed','home'),('following_feed','following')])
+def test_read_feed_dispatch_uses_readonly_host_operation(monkeypatch,action,source):
+    from hermes_life_test import native_life,host as native_host
+    captured=[]
+    def handler(name):
+        def call(args):
+            captured.append((name,args));return 'feed'
+        return call
+    monkeypatch.setattr(native_host,'handler',handler)
+    assert native_life.read({'action':action})=='feed'
+    assert captured==[('bili_feed',{'source':source})]

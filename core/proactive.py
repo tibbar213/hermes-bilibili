@@ -1013,7 +1013,7 @@ UP主：{video.get('up_name', '')}
             )
             if d.get("code") == 0:
                 for v in d.get("data", {}).get("item", []):
-                    if v.get("goto") != "av":
+                    if v.get("goto") != "av" or v.get("is_ad") or v.get("ad_info"):
                         continue  # 跳过广告/直播等
                     videos.append({
                         "bvid": v.get("bvid", ""),
