@@ -618,7 +618,7 @@ class BilibiliAPIMixin:
             return None
 
     # ── 动态发送 ──
-    async def _post_dynamic_text(self, text):
+    async def _post_dynamic_text(self, text, *, strict=False):
         data = {
             "dynamic_id": 0, "type": 4, "rid": 0, "content": text,
             "up_choose_comment": 0, "up_close_comment": 0,
@@ -635,6 +635,8 @@ class BilibiliAPIMixin:
                 logger.warning(f"[BiliBot] 动态发送失败: {result}")
                 return False
         except Exception as e:
+            if strict:
+                raise  # The action ledger must retain unknown sends instead of retrying them.
             logger.error(f"[BiliBot] 动态发送异常: {e}")
             return False
 

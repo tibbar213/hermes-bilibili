@@ -36,6 +36,7 @@ class Config(dict):
         self['ENABLE_PERSONALITY_EVOLUTION'] = False
         self['SHARED_HERMES_MEMORY'] = True
         self['VIDEO_SUBTITLES_ONLY'] = True
+        self['ENABLE_AUTONOMOUS_DAILY_PLAN'] = False
         self['PROACTIVE_COIN'] = False
         self['PROACTIVE_FOLLOW'] = False
         self['BEHAVIOR_BUDGET_ENABLED'] = True

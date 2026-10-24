@@ -16,7 +16,9 @@ Hermes 原生 B 站插件：让同一个代理在 B 站搜索、读字幕、回�
 - 长期事实读写 Hermes 内置 MemoryStore；B 站只单独保留会话上下文、媒体缓存、去重与额度记录。
 - 直播读取弹幕，不读取主播音频或画面；默认房间号为 0，不进入直播间。
 - 自动行为上限：浏览 3/天、动态 1/天、评论回复 20/天、私信回复 20/天；自动投币和关注关闭。
-- 调度由 gateway 单实例持有，CLI/子代理经私有 Unix socket 复用。
+- 自主生活和缓存维护使用 Hermes 原生 cron；B 站后台只负责消息监听和连接维护。CLI/子代理经私有 Unix socket 复用连接。
+- B 站回复进入真实 Hermes AIAgent 会话与工具循环；辅助模型仅用于摘要、筛选等内部步骤。
+- 外部消息和自主生活没有终端、文件、安装、权限管理等服务器工具；QQ 主人授权机制独立保留。
 - QQ 账号管理仅限配置的主人，工具写操作需结合现有任务授权机制。插件本身不包含 QQ 渠道适配器。
 
 ## 使用
@@ -27,6 +29,9 @@ hermes bilibili check
 hermes bilibili login
 hermes bilibili confirm
 hermes bilibili plan
+hermes bilibili life_start
+hermes bilibili life_pause
+hermes cron list
 hermes bilibili live --room-id 0
 ```
 
@@ -34,7 +39,7 @@ hermes bilibili live --room-id 0
 
 ## 开发与分发
 
-项目结构和 Hermes 接口边界见 [架构文档](docs/ARCHITECTURE.md)。原生行为测试需要 Hermes 环境；历史实测范围见 [验证记录](docs/VERIFICATION.md)。当前通过 18 项适配测试，不承诺所有 Hermes 版本兼容。
+项目结构和 Hermes 接口边界见 [架构文档](docs/ARCHITECTURE.md)。原生行为测试需要 Hermes 环境；历史实测范围见 [验证记录](docs/VERIFICATION.md)。当前通过 37 项适配测试，不承诺所有 Hermes 版本兼容。
 
 本项目按 plugin.yaml 安装，不是 pip 包。pyproject.toml 只配置开发工具。
 
@@ -48,3 +53,10 @@ python scripts/package.py
 ## 来源
 
 业务核心移植自 [astrbot_plugin_bilibili_ai_bot](https://github.com/chenluQwQ/astrbot_plugin_bilibili_ai_bot)，具体提交见 [UPSTREAM.json](UPSTREAM.json)。代码使用 [MIT](LICENSE)，内置 Noto 字体使用 [SIL OFL 1.1](assets/fonts/OFL.txt)。详见 [NOTICE](NOTICE.md) 和 [更新记录](CHANGELOG.md)。
+
+
+## 原生自主生活
+
+`NATIVE_LIFE_ENABLED` 控制原生生活任务安装，默认未开启；由主人执行 `life_start` 开启、`life_pause` 暂停。首次创建 fish-life（10:00/15:00/21:00）与 fish-home-maintenance（03:30），使用 Hermes 配置时区。以后可以在原生 cron 中调整或暂停，重启不会覆盖这些修改。
+
+生活任务可以阅读公开互联网、读取视频字幕、记录新事实，以及在预算内自主发动态。它可以选择什么都不做，结果保留本地任务记录；故障投递给主人私聊。QQ群只从显式授权名单与已有渠道交集中选择，且最近10分钟有活动才考虑说话；每群每天最多2次、至少间隔3小时。实际投递仍受 QQ 官方主动消息权限和窗口限制。房间号0仍不加入直播。

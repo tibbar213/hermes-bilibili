@@ -1,4 +1,4 @@
 name: hermes-bilibili
-version: 0.2.1
+version: 0.3.0
 description: Native Hermes Bilibili tools, account session and autonomous social schedules
-provides_tools: [bili_recall, bili_parse_video, search_bilibili, watch_video, bili_bangumi, bili_action, bili_watch_videos, bili_block_user, bilibili_manage]
+provides_tools: [bili_recall, bili_parse_video, search_bilibili, watch_video, bili_bangumi, bili_action, bili_watch_videos, bili_block_user, bilibili_manage, fish_read, fish_life]

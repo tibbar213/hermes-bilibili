@@ -104,11 +104,63 @@ class Host:
             raise ValueError('Unknown Bilibili tool')
         return str(await tool.call(ContextWrapper(SimpleNamespace(event=None)),**args))
 
+    async def life_action(self,args):
+        await self.open()
+        action=args.get('action')
+        if action=='remember':
+            text=str(args.get('text') or '').strip()
+            if not text or len(text)>1200:
+                raise ValueError('Invalid memory candidate')
+            import hashlib
+            saved=await self.runtime.shared_memory.remember({'rpid':'native-life:'+hashlib.sha256(text.encode()).hexdigest(),
+                'user_id':'self','memory_type':'chat','text':text})
+            return {'saved':bool(saved),'backend':'hermes'}
+        if action=='maintain':
+            return {'result':await self.runtime._consolidation.run_daily()}
+        if action=='dynamic':
+            if not self.runtime.config.get('ENABLE_DYNAMIC',False):
+                return {'skipped':True,'reason':'自主动态未启用'}
+            from .core.config import DYNAMIC_LOG_FILE
+            from .core.security.redact import contains_credentials,redact_outbound
+            text=str(args.get('text') or '').strip()
+            if not text or len(text)>1000 or contains_credentials(text):
+                raise ValueError('Invalid dynamic text')
+            text=redact_outbound(text,internal=False)[0]
+            success=await self.runtime._queue_dynamic_post(text,lambda:self.runtime._post_dynamic_text(text,strict=True))
+            if success:
+                from datetime import datetime
+                rows=self.runtime._load_json(DYNAMIC_LOG_FILE,[])
+                rows.append({'time':datetime.now().strftime('%Y-%m-%d %H:%M'),'text':text,'native_agent':True})
+                self.runtime._save_json(DYNAMIC_LOG_FILE,rows[-100:])
+                await self.runtime._save_self_memory_record('dynamic',text,memory_type='dynamic')
+            return {'sent':bool(success)}
+        if action=='watch':
+            if not self.runtime.config.get('ENABLE_PROACTIVE',False):
+                return {'skipped':True,'reason':'自主浏览未启用'}
+            from .core.runtime import ActionRequest
+            from datetime import datetime
+            import re
+            bvid=str(args.get('bvid') or '')
+            if not re.fullmatch(r'BV[0-9A-Za-z]{10}',bvid):
+                raise ValueError('Invalid BV ID')
+            if await self.runtime._seen_video_record(bvid):
+                return await self.runtime._watch_video_and_save_memory(bvid)
+            result={}
+            async def watch():
+                value=await self.runtime._watch_video_and_save_memory(bvid)
+                result.update(value)
+                return bool(value.get('ok'))
+            outcome=await self.runtime.event_runtime.execute(ActionRequest(
+                key='native_watch:'+datetime.now().strftime('%Y-%m-%d')+':'+bvid,
+                kind='proactive_watch',event_key='native_life_watch:'+bvid,target_id=bvid),watch)
+            return result or {'skipped':True,'reason':outcome.reason}
+        raise ValueError('Unknown native life action')
+
     async def control(self,args):
         action=args.get('action','status')
         if action=='status':
             return {'running':self.runtime._running,'credentials_present':self.runtime._has_cookie(),
-                    'limits':LIMITS,'memory_backend':'hermes','video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
+                    'limits':LIMITS,'memory_backend':'hermes','reply_engine':'hermes_agent','scheduler':'hermes_cron','native_life_enabled':bool(self.runtime.config.get('NATIVE_LIFE_ENABLED')),'video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
                     'live_room_id':self.runtime._live_room_id(),
                     'live_running':bool(self.runtime._live_danmaku_task and not self.runtime._live_danmaku_task.done()),'tools':[t.name for t in self.runtime.context.tools]}
         if action=='check':
@@ -136,8 +188,19 @@ class Host:
                 self.runtime._login_qrcode_key=None
             return {'code':code,'message':message}
         elif action=='plan':
-            from .core.config import SCHEDULE_FILE
-            return self.runtime._load_json(SCHEDULE_FILE,{})
+            from .native_life import jobs_state
+            from cron.jobs import get_job
+            return {'scheduler':'hermes_cron','jobs':{kind:get_job(job_id) for kind,job_id in jobs_state()['jobs'].items()}}
+        elif action in {'life_start','life_pause'}:
+            from .native_life import install_jobs,jobs_state
+            from cron.jobs import pause_job,resume_job
+            enabled=action=='life_start'
+            self.runtime.config['NATIVE_LIFE_ENABLED']=enabled
+            self.runtime.config.save_config()
+            state=install_jobs() if enabled else jobs_state()
+            for job_id in state['jobs'].values():
+                (resume_job if enabled else pause_job)(job_id)
+            return {'scheduler':'hermes_cron','enabled':enabled,'jobs':state['jobs']}
         elif action=='live':
             room=args.get('room_id')
             if isinstance(room,bool) or not isinstance(room,int) or room<0:

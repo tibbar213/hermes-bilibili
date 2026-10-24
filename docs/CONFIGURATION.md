@@ -12,7 +12,7 @@ config_schema.json 来自上游核心，是配置默认值参考；其中部分 
 
 ## 后台行为
 
-ENABLE_REPLY 控制评论/@回复；ENABLE_PRIVATE_MESSAGES 与 PRIVATE_MESSAGE_AUTO_REPLY 控制私信轮询和回复。ENABLE_PROACTIVE 控制自主浏览，ENABLE_DYNAMIC 控制自主动态。安装示例将其关闭；启用后会产生真实账号行为。
+ENABLE_REPLY 控制评论/@回复；ENABLE_PRIVATE_MESSAGES 与 PRIVATE_MESSAGE_AUTO_REPLY 控制私信轮询和回复。ENABLE_PROACTIVE 控制自主浏览，ENABLE_DYNAMIC 控制自主动态。NATIVE_LIFE_ENABLED 控制 Hermes 原生生活任务；旧 ENABLE_AUTONOMOUS_DAILY_PLAN 固定关闭，不再作为插件内部调度使用。安装示例将其关闭；启用后会产生真实账号行为。
 
 当前版本在 settings.py 强制设置自动行为上限：浏览 3/天、动态 1/天、评论回复 20/天、私信回复 20/天；自动投币与自动关注关闭。它们是项目当前的默认策略上限，不是承诺必定执行的数量。模型决定计划，调度遵守睡眠时间、冷却和持久预算。显式手动互动按调用侧授权处理。
 
@@ -50,3 +50,12 @@ QQ 权限扩展应按参数区分查询/写操作。bilibili_manage 的 status/c
 长期事实通过 Hermes 原生 MemoryStore 读写同一个 MEMORY.md/USER.md，遵守原生开关、文件锁和容量限制。当前记忆后端为 Hermes 内置 MemoryStore，尚未适配第三方记忆 provider。QQ 每轮刷新同一份笔记，B 站文本生成同样读取它。
 
 SQLite/JSON 保存会话、视频缓存、去重和预算，不再独立晋升人格长期记忆。记忆满时不会自动挤掉已有条目；活动记录仍保留。不同平台的用户不会自动认定为同一个人。
+
+
+## 原生生活任务
+
+`hermes bilibili life_start` 创建/恢复原生任务，`life_pause` 暂停；`hermes cron list` 查看并按原生 cron 命令调整。首次默认创建 fish-life 与 fish-home-maintenance，后续启动尊重现有暂停和时间设置。普通执行结果只在本地任务记录，不自动发群；失败投递到配置的主人私聊。
+
+新增 fish_read（公开搜索/状态）和 fish_life（有界观看、动态、群聊、记忆候选和缓存维护）两个工具，共11个插件工具。fish_life 仅限插件记录的真实原生任务身份或已验证QQ主人；直接传 owner=true、任务ID或权限声明不能授权。原生生活任务没有服务器操作工具。
+
+QQ群分享仅限显式 group_allow_from/QQ_GROUP_ALLOWED_USERS 与已有群渠道交集，不自动把通配符解释成允许去所有群。只记录群活动时间，不复制群聊天正文作为外发素材。每群每天2次，间隔3小时；失败/未知尝试不自动重发。QQ官方主动消息权限不足时可能无法投递，不作送达保证。

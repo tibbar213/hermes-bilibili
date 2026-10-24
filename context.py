@@ -29,6 +29,12 @@ class NativeContext:
         return []
 
     async def llm_generate(self, prompt, system_prompt='', max_tokens=600, chat_provider_id='hermes', include_memory=True, **kwargs):
+        from .life_security import REPLY
+        identity = REPLY.get()
+        if identity is not None and system_prompt and chat_provider_id != 'hermes-vision':
+            from .native_agent import run_reply
+            result = await asyncio.to_thread(run_reply,self.home,identity,prompt,system_prompt,max_tokens)
+            return SimpleNamespace(completion_text=result)
         from agent.auxiliary_client import call_llm, extract_content_or_reasoning
         if include_memory and chat_provider_id != 'hermes-vision':
             from .shared_memory import shared_context

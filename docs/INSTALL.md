@@ -23,8 +23,13 @@ hermes bilibili check
 hermes bilibili plan
 ```
 
-预期原生注册 9 个工具，账号 check 成功，video_subtitles_only 为 true，memory_backend 为 hermes。未指定直播间时 live_room_id 为 0、live_running 为 false。多次执行 CLI 不应新增轮询实例。
+预期原生注册 11 个工具，账号 check 成功，video_subtitles_only 为 true，memory_backend 为 hermes。未指定直播间时 live_room_id 为 0、live_running 为 false。多次执行 CLI 不应新增轮询实例。
 
 ## 更新和回滚
 
 更新前备份插件源码、配置和 bilibili 数据目录；运行测试，等待活跃任务结束后替换源码并重启 gateway。回滚恢复对应插件与配置；需要恢复 SQLite 时先停止该插件的写入，防止数据文件不一致。不要把长期记忆整份回退覆盖掉更新后其他会话新增的笔记。
+
+
+## 升级到0.3
+
+等待正在运行的任务结束，备份旧插件、B站设置和相关原生cron记录后替换源码。确认 NATIVE_LIFE_ENABLED、ENABLE_PROACTIVE、ENABLE_DYNAMIC 的意图，再用 life_start 注册/恢复原生任务；不要同时保留旧版插件的自主调度进程。部署后检查 status 中 scheduler=hermes_cron、reply_engine=hermes_agent，并用 hermes cron list 查看任务。不要为解决权限拦截而给外部会话增加终端或文件工具。

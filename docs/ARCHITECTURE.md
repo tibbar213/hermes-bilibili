@@ -2,7 +2,10 @@
 
 ```text
 plugin.yaml / __init__.py   原生注册工具、CLI、记忆刷新 hook
-host.py                    profile 绑定的后台循环与控制入口
+host.py                    profile 绑定的消息监听与控制入口
+native_agent.py            B站会话进入真实 Hermes AIAgent/SessionDB
+native_life.py             原生 cron 注册、公开阅读与有界社交工具
+life_security.py           按真实会话/cron执行身份限制工具
 ipc.py                     私有 Unix socket 与单实例文件锁
 context.py                 Hermes 模型、人格、主人通知接口
 shared_memory.py           Hermes 原生长期记忆和活动记录维护
@@ -29,3 +32,12 @@ core 保留部分上游旧术语和可选路径，迁移来源由 UPSTREAM.json 
 在具有 Hermes 源码/依赖的环境中使用该版本的官方测试运行器。例如将本项目的 tests/test_native.py 作为测试目标传给 Hermes scripts/run_tests.sh。测试以临时目录隔离凭据、记忆、预算和 socket，不访问真实 B 站账号。
 
 远端历史实测记录见 docs/VERIFICATION.md。测试不证明所有 Hermes 版本兼容，也不代表公开评论、动态或弹幕已经真实外发。
+
+
+## 0.3 原生任务与权限
+
+自主生活和媒体维护由 cron.jobs.create_job 创建，执行记录、会话和暂停状态由 Hermes 管理；插件消息循环不再生成日程或触发自主浏览、动态、追番。原生任务默认只开放 fish_read/fish_life；pre_tool_call 额外按 cron.execution_identity 确认任务真实身份，合入的其他 MCP 工具也不能越过工具边界。
+
+B站回复在 REPLY ContextVar 中绑定从已接收事件取得的渠道/用户/会话，调用 AIAgent.run_conversation，持久化 Hermes SessionDB。终端、文件、递归代理、定时任务管理、通用发送和账号管理均不向外部B站会话开放；文本自称主人不会改变后端身份。辅助筛选和摘要仍可使用 Hermes auxiliary_client。
+
+自主生活不是宿主机管理员授权。维护工具只维护自己的媒体记录；其他成员的服务器任务仍由 QQ 权限插件按整项任务请求主人批准。授权身份不写进模型可修改的记忆。

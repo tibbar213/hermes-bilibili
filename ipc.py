@@ -35,6 +35,8 @@ async def start_server(host):
                 value=host.schemas
             elif operation=='control':
                 value=await host.control(data.get('args') or {})
+            elif operation=='life_action':
+                value=await host.life_action(data.get('args') or {})
             elif operation=='invoke':
                 value=await host.invoke(str(data.get('name','')),data.get('args') or {})
             else:
@@ -74,6 +76,9 @@ class Proxy:
 
     async def control(self,args):
         return await asyncio.to_thread(request,self.home,{'operation':'control','args':args})
+
+    async def life_action(self,args):
+        return await asyncio.to_thread(request,self.home,{'operation':'life_action','args':args})
 
     async def invoke(self,name,args):
         return await asyncio.to_thread(request,self.home,{'operation':'invoke','name':name,'args':args})

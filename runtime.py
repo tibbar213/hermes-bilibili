@@ -5,11 +5,12 @@ from .core.config import *
 from .core import *
 from .native_types import Image, Plain
 from .shared_memory import NativeMemoryMixin, SharedMemory, EventHistoryMaintenance
+from .life_security import NativeReplyMixin
 logger = logging.getLogger("hermes_bilibili")
 _ACTIVE_BILIBOT = None
 _BILIBOT_MAIN_TASK_NAME = "hermes-bilibili.main-loop"
 
-class BilibiliRuntime(NativeMemoryMixin, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, AffectionMixin, PersonalityMixin, BilibiliAPIMixin, BangumiMixin, WebSearchMixin, VideoMixin, ReplyMixin, ProactiveMixin, DynamicMixin, ScheduleMixin, WeeklySummaryMixin, ShareMixin, PrivateMessageMixin, LiveDanmakuMixin):
+class BilibiliRuntime(NativeReplyMixin, NativeMemoryMixin, UtilsMixin, LLMMixin, VisionMixin, MemoryMixin, AffectionMixin, PersonalityMixin, BilibiliAPIMixin, BangumiMixin, WebSearchMixin, VideoMixin, ReplyMixin, ProactiveMixin, DynamicMixin, ScheduleMixin, WeeklySummaryMixin, ShareMixin, PrivateMessageMixin, LiveDanmakuMixin):
     async def _web_search(self, query):
         from tools.web_tools import web_search_tool
         return await asyncio.to_thread(web_search_tool, query, limit=3)
@@ -123,7 +124,6 @@ class BilibiliRuntime(NativeMemoryMixin, UtilsMixin, LLMMixin, VisionMixin, Memo
                 await asyncio.gather(*stale_tasks, return_exceptions=True)
                 logger.warning(f'[BiliBot] 已清理 {len(stale_tasks)} 个热重载残留主循环')
             await self._ensure_buvid()
-            self._mark_overdue_schedule_as_triggered_on_startup()
             if self.config.get('ENABLE_PRIVATE_MESSAGES', False):
                 private_state = self._load_json(PRIVATE_MESSAGE_STATE_FILE, {})
                 if isinstance(private_state, dict) and private_state.get('initialized'):
@@ -189,154 +189,30 @@ class BilibiliRuntime(NativeMemoryMixin, UtilsMixin, LLMMixin, VisionMixin, Memo
             logger.error(f'[BiliBot] 日终清算异常: {e}', exc_info=True)
 
     async def _main_loop(self):
-        logger.info('[BiliBot] 主循环开始')
+        """Only transport upkeep and inbound polling; autonomous activities belong to Hermes cron."""
+        logger.info('[BiliBot] 消息监听开始；自主活动由 Hermes 原生定时任务调度')
         while self._running:
             try:
-                await self._maybe_evolve_personality()
-                await self._ensure_autonomous_daily_plan()
-                h = datetime.now().hour
-                ss = self.config.get('SLEEP_START', 2)
-                se = self.config.get('SLEEP_END', 8)
-                in_sleep = ss <= h < se if ss <= se else h >= ss or h < se
-                if in_sleep:
-                    if self._consolidation.should_run_today():
-                        if self._consolidation_task is None or self._consolidation_task.done():
-                            self._consolidation_task = asyncio.create_task(self._run_consolidation_safe())
-                    elif self._consolidation_task is None or self._consolidation_task.done():
-                        try:
-                            await self._maybe_daily_summary()
-                        except Exception as e:
-                            logger.error(f'[BiliBot] 日总结调度异常: {e}')
-                        try:
-                            await self._maybe_weekly_summary()
-                        except Exception as e:
-                            logger.error(f'[BiliBot] 周总结调度异常: {e}')
-                    await asyncio.sleep(60)
-                    continue
-                ci = self.config.get('COOKIE_CHECK_INTERVAL', 6) * 3600
-                if time.time() - self._last_cookie_check > ci:
+                interval = float(self.config.get('COOKIE_CHECK_INTERVAL',6))*3600
+                if time.time()-self._last_cookie_check > interval:
                     await self._check_and_refresh_cookie()
-                self._last_cookie_check = time.time()
-                if self.config.get('ENABLE_PROACTIVE', False):
-                    now_dt = datetime.now()
-                    today_str = now_dt.strftime('%Y-%m-%d')
-                    sched = self._load_json(SCHEDULE_FILE, {})
-                    if sched.get('date') != today_str:
-                        self._proactive_times, self._proactive_triggered = self._generate_daily_schedule()
-                        logger.info(f"[BiliBot] 📅 新的一天！主动视频时间：{[f'{ph}:{pm:02d}' for ph, pm in self._proactive_times]}")
-                    elif not self._proactive_times:
-                        self._proactive_times, self._proactive_triggered = self._load_or_generate_schedule()
-                    for ph, pm in self._proactive_times:
-                        key = f'{ph}:{pm:02d}'
-                        if key not in self._proactive_triggered and self._schedule_slot_due(now_dt, ph, pm):
-                            if self._proactive_task is None or self._proactive_task.done():
-                                self._proactive_task = asyncio.create_task(self._run_proactive())
-                                self._proactive_triggered.add(key)
-                                self._save_schedule_state(self._proactive_times, self._proactive_triggered)
-                                trigger_log = self._load_json(PROACTIVE_TRIGGER_LOG_FILE, [])
-                                trigger_log.append({'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'type': 'proactive_video', 'scheduled': key, 'status': 'triggered'})
-                                self._save_json(PROACTIVE_TRIGGER_LOG_FILE, trigger_log[-200:])
-                                logger.info(f'[BiliBot] 🎯 触发主动视频（{key}）')
-                                break
-                if self.config.get('ENABLE_DYNAMIC', False):
-                    now_dt = datetime.now()
-                    today_str = now_dt.strftime('%Y-%m-%d')
-                    sched = self._load_json(DYNAMIC_SCHEDULE_FILE, {})
-                    if sched.get('date') != today_str:
-                        self._dynamic_times, self._dynamic_triggered = self._generate_dynamic_schedule()
-                        logger.info(f"[BiliBot] 📅 动态时间：{[f'{dh}:{dm:02d}' for dh, dm in self._dynamic_times]}")
-                    elif not self._dynamic_times:
-                        self._dynamic_times, self._dynamic_triggered = self._load_or_generate_dynamic_schedule()
-                    for dh, dm in self._dynamic_times:
-                        key = f'{dh}:{dm:02d}'
-                        if key not in self._dynamic_triggered and self._schedule_slot_due(now_dt, dh, dm):
-                            if self._dynamic_task is None or self._dynamic_task.done():
-                                self._dynamic_task = asyncio.create_task(self._run_dynamic())
-                                self._dynamic_triggered.add(key)
-                                self._save_dynamic_schedule_state(self._dynamic_times, self._dynamic_triggered)
-                                logger.info(f'[BiliBot] 📢 触发动态发布（{key}）')
-                                break
-                if self.config.get('ENABLE_PRIVATE_MESSAGES', False):
-                    await self._poll_private_messages()
-                if self.config.get('ENABLE_REPLY', True):
-                    await self._poll_unified()
-                if self.config.get('ENABLE_BANGUMI', False) and self.config.get('BANGUMI_PROACTIVE', False):
-                    now_dt = datetime.now()
-                    today_str = now_dt.strftime('%Y-%m-%d')
-                    bsched = self._load_json(BANGUMI_SCHEDULE_FILE, {})
-                    if bsched.get('date') != today_str:
-                        self._bangumi_times, self._bangumi_triggered, self._bangumi_update_checked = self._generate_bangumi_schedule()
-                        logger.info(f"[BiliBot] 📅 番剧时间：{[f'{bh}:{bm:02d}' for bh, bm in self._bangumi_times]}")
-                    elif not self._bangumi_times:
-                        self._bangumi_times, self._bangumi_triggered, self._bangumi_update_checked = self._load_or_generate_bangumi_schedule()
-                    if self._bangumi_task is None or self._bangumi_task.done():
-                        if not self._bangumi_update_checked:
-                            for bh, bm in self._bangumi_times:
-                                key = f'{bh}:{bm:02d}'
-                                if key not in self._bangumi_triggered and self._schedule_slot_due(now_dt, bh, bm):
-                                    self._bangumi_update_checked = True
-                                    self._bangumi_task = asyncio.create_task(self._check_bangumi_updates())
-                                    self._bangumi_triggered.add(key)
-                                    self._save_bangumi_schedule_state(self._bangumi_times, self._bangumi_triggered, True)
-                                    trigger_log = self._load_json(PROACTIVE_TRIGGER_LOG_FILE, [])
-                                    trigger_log.append({'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'type': 'bangumi_update_check', 'scheduled': key, 'status': 'triggered'})
-                                    self._save_json(PROACTIVE_TRIGGER_LOG_FILE, trigger_log[-200:])
-                                    logger.info(f'[BiliBot] 📺 触发每日追番更新检查（{key}）')
-                                    break
-                        else:
-                            for bh, bm in self._bangumi_times:
-                                key = f'{bh}:{bm:02d}'
-                                if key not in self._bangumi_triggered and self._schedule_slot_due(now_dt, bh, bm):
-                                    self._bangumi_task = asyncio.create_task(self._run_bangumi())
-                                    self._bangumi_triggered.add(key)
-                                    self._save_bangumi_schedule_state(self._bangumi_times, self._bangumi_triggered, self._bangumi_update_checked)
-                                    trigger_log = self._load_json(PROACTIVE_TRIGGER_LOG_FILE, [])
-                                    trigger_log.append({'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'type': 'bangumi_watch', 'scheduled': key, 'status': 'triggered'})
-                                    self._save_json(PROACTIVE_TRIGGER_LOG_FILE, trigger_log[-200:])
-                                    logger.info(f'[BiliBot] 🎬 触发主动看番（{key}）')
-                                    break
-                if self.config.get('ENABLE_DYNAMIC_WATCH', False):
-                    now_dt = datetime.now()
-                    for dh, dm in getattr(self, '_dynamic_watch_times', []):
-                        key = f'{dh}:{dm:02d}'
-                        if key not in getattr(self, '_dynamic_watch_triggered', set()) and self._schedule_slot_due(now_dt, dh, dm):
-                            if self._dynamic_watch_task is None or self._dynamic_watch_task.done():
-                                self._dynamic_watch_task = asyncio.create_task(self._run_dynamic_watch())
-                                self._dynamic_watch_triggered.add(key)
-                                self._save_dynamic_watch_schedule_state(self._dynamic_watch_times, self._dynamic_watch_triggered)
-                                trigger_log = self._load_json(PROACTIVE_TRIGGER_LOG_FILE, [])
-                                trigger_log.append({'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'type': 'dynamic_watch', 'scheduled': key, 'status': 'triggered'})
-                                self._save_json(PROACTIVE_TRIGGER_LOG_FILE, trigger_log[-200:])
-                                logger.info(f'[BiliBot] 📰 触发关注动态巡视（{key}）')
-                                break
-                if self.config.get('SPECIAL_FOLLOW_ENABLED', False):
-                    now_dt = datetime.now()
-                    today_str = now_dt.strftime('%Y-%m-%d')
-                    sfsched = self._load_json(SPECIAL_FOLLOW_SCHEDULE_FILE, {})
-                    if sfsched.get('date') != today_str:
-                        self._special_follow_times, self._special_follow_triggered = self._generate_special_follow_schedule()
-                        logger.info(f"[BiliBot] 📅 特关时间：{[f'{sh}:{sm:02d}' for sh, sm in self._special_follow_times]}")
-                    elif not self._special_follow_times:
-                        self._special_follow_times, self._special_follow_triggered = self._load_or_generate_special_follow_schedule()
-                    for sh, sm in self._special_follow_times:
-                        key = f'{sh}:{sm:02d}'
-                        if key not in self._special_follow_triggered and self._schedule_slot_due(now_dt, sh, sm):
-                            if self._special_follow_task is None or self._special_follow_task.done():
-                                self._special_follow_task = asyncio.create_task(self._run_special_follow())
-                                self._special_follow_triggered.add(key)
-                                self._save_special_follow_schedule_state(self._special_follow_times, self._special_follow_triggered)
-                                trigger_log = self._load_json(PROACTIVE_TRIGGER_LOG_FILE, [])
-                                trigger_log.append({'time': datetime.now().strftime('%Y-%m-%d %H:%M:%S'), 'type': 'special_follow', 'scheduled': key, 'status': 'triggered'})
-                                self._save_json(PROACTIVE_TRIGGER_LOG_FILE, trigger_log[-200:])
-                                logger.info(f'[BiliBot] ⭐ 触发特别关注巡视（{key}）')
-                                break
-                await asyncio.sleep(self.config.get('POLL_INTERVAL', 20))
+                    self._last_cookie_check=time.time()
+                hour=datetime.now().hour
+                start=int(self.config.get('SLEEP_START',2))
+                end=int(self.config.get('SLEEP_END',8))
+                sleeping=(start <= hour < end) if start<=end else (hour>=start or hour<end)
+                if not sleeping:
+                    if self.config.get('ENABLE_PRIVATE_MESSAGES',False):
+                        await self._poll_private_messages()
+                    if self.config.get('ENABLE_REPLY',True):
+                        await self._poll_unified()
+                await asyncio.sleep(max(10,float(self.config.get('POLL_INTERVAL',20))))
             except asyncio.CancelledError:
                 break
-            except Exception as e:
-                logger.error(f'[BiliBot] 主循环出错: {e}\n{traceback.format_exc()}')
+            except Exception as exc:
+                logger.warning('B站监听暂时失败 (%s)',type(exc).__name__)
                 await asyncio.sleep(30)
-        self._running = False
+        self._running=False
 
     async def _check_and_refresh_cookie(self):
         valid, info = await self.check_cookie()
