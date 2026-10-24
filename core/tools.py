@@ -4,6 +4,7 @@
 from datetime import datetime
 import asyncio
 import hashlib
+import json
 import random
 import time
 from pydantic import Field
@@ -876,20 +877,23 @@ def create_tools(plugin):
             "Report the available evidence and missing records honestly; an empty search is not a tool failure. "
             "Do not repeatedly rephrase empty searches or search other dates without a reason. "
             "A posted dynamic alone does not prove that its source video was watched."
+            " Use activity for dated browsing/proactive-comment receipts and consumed daily budgets."
         )
         parameters: dict = Field(default_factory=lambda: {
             "type": "object",
             "properties": {
                 "memory_type": {
                     "type": "string",
-                    "enum": ["user", "conversation", "today", "video", "dynamic", "bangumi"],
+                    "enum": ["user", "conversation", "today", "activity", "video", "dynamic", "bangumi"],
                     "description": "memory category",
                 },
                 "query": {
                     "type": "string",
-                    "description": "UID/name for user, keyword for other memory types, or YYYY-MM-DD for today",
+                    "description": "UID/name for user, keyword for other memory types, or YYYY-MM-DD for today/activity",
                     "default": "",
                 },
+                "activity_kind": {"type":"string", "enum":["all","browse","comment"], "default":"all", "description":"activity only: browsing or proactive comments"},
+                "limit": {"type":"integer", "minimum":1,"maximum":100,"default":30,"description":"activity records to return"},
                 "user_id": {
                     "type": "string",
                     "description": "optional UID filter for conversation memory",
@@ -916,6 +920,8 @@ def create_tools(plugin):
                 )
             if memory_type == "today":
                 return await RecallTodayTool().call(context, date=query)
+            if memory_type == "activity":
+                return json.dumps(plugin.memory_api.activity_records(query, kwargs.get('activity_kind','all'), kwargs.get('limit',30)), ensure_ascii=False)
             if memory_type == "video":
                 if not query:
                     return "请提供视频记忆关键词。"

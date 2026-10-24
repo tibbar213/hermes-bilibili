@@ -171,6 +171,26 @@ class BiliBotMemoryAPI:
         """Return the bot's activity overview without requiring an LLM tool loop."""
         target_date = date or datetime.now().strftime("%Y-%m-%d")
         parts = []
+        from .activity_history import list_activity
+        data_dir = getattr(getattr(self.bot, 'config', None), 'data_dir', None)
+        activity = list_activity(data_dir, target_date, limit=100)
+        browsing = [r for r in activity if r['kind'] == 'browse']
+        if browsing:
+            labels = {'subtitles_read':'读到字幕', 'media_read':'读取媒体', 'metadata_only':'仅浏览外部资料',
+                      'seen_record':'读取旧观看痕迹', 'unavailable':'资料不可用', 'skipped':'未执行/额度拦截', 'basis_unknown':'来源未确认'}
+            lines = [f"📖 浏览流水 {len(browsing)} 条（不等于成功观看数）:"]
+            for r in browsing[:20]:
+                lines.append(f"  [{r['time'][11:]}] {r.get('title') or r.get('bvid')}：{labels.get(r['status'],r['status'])}" + ('；复访/缓存' if r.get('from_cache') else '') + f" https://www.bilibili.com/video/{r.get('bvid','')}")
+            if len(browsing)>20:
+                lines.append('仅列最近20条；用 bili_recall(memory_type="activity") 查询更多。')
+            parts.append('\n'.join(lines))
+        own_comments = [r for r in activity if r['kind'] == 'comment']
+        if own_comments:
+            labels = {'sent':'已发送','already_sent':'此前已发送，正文未追溯','unknown':'发送结果未确认','failed':'未发送成功'}
+            lines = [f"📝 主动评论流水 {len(own_comments)} 条:"]
+            for r in own_comments[:20]:
+                lines.append(f"  [{r['time'][11:]}] {r.get('bvid')} {labels.get(r['status'],r['status'])}：{r.get('text','')}" + (f" 评论ID={r['rpid']}" if r.get('rpid') else ''))
+            parts.append('\n'.join(lines))
         watch = [item for item in self.bot._load_json(WATCH_LOG_FILE, []) if item.get("time", "").startswith(target_date)]
         if watch:
             lines = [f"🎬 看了 {len(watch)} 个视频:"]
@@ -220,6 +240,14 @@ class BiliBotMemoryAPI:
         if not parts:
             return f"{target_date} 没有任何活动记录。"
         return f"📋 {target_date} 活动总览:\n\n" + "\n\n".join(parts)
+
+    def activity_records(self, date='', kind='all', limit=30):
+        from .activity_history import list_activity, daily_usage
+        target = date or datetime.now().strftime('%Y-%m-%d')
+        config = getattr(self.bot, 'config', {})
+        data_dir = getattr(config, 'data_dir', None)
+        return {'date':target, 'items':list_activity(data_dir,target,kind=kind,limit=limit),
+                'budgets':daily_usage(data_dir,config,target) if data_dir else None}
 
     async def recall_user(
         self,

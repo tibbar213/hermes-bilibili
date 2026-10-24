@@ -8,6 +8,7 @@ import os
 import shlex
 import sys
 import threading
+import uuid
 from types import SimpleNamespace
 
 from hermes_constants import get_hermes_home
@@ -171,6 +172,7 @@ class Host:
             oid=await self.runtime._get_video_oid(bvid)
             if not oid:
                 return {'skipped':True,'reason':'视频不存在或信息不可读'}
+            receipt = {}
             async def send():
                 try:
                     payload,_=await self.runtime._http_post(BILI_REPLY_URL,
@@ -179,11 +181,18 @@ class Host:
                         raise ValueError('Missing result')
                 except Exception as exc:
                     raise TimeoutError('评论发送结果未确认，不自动重发') from exc
+                if payload['code'] == 0:
+                    data = payload.get('data') or {}
+                    receipt['rpid'] = str(data.get('rpid') or (data.get('reply') or {}).get('rpid') or '')
                 return payload['code']==0
             outcome=await self.runtime.event_runtime.execute(ActionRequest(
                 key='native_life_comment:'+bvid,kind='proactive_comment',
                 event_key='native_life_comment:'+bvid,target_id=str(oid)),send)
-            return {'sent':bool(outcome.success and not outcome.duplicate),
+            from .core.activity_history import record_activity
+            state = 'already_sent' if outcome.success and outcome.duplicate else 'sent' if outcome.success else 'unknown' if getattr(outcome.state, 'value', outcome.state) == 'unknown' else 'failed'
+            recorded = record_activity(self.home/'bilibili', key='comment:'+bvid, kind='comment', status=state,
+                bvid=bvid, text='' if outcome.duplicate else text, rpid=receipt.get('rpid',''), note=outcome.reason)
+            return {'sent':bool(outcome.success and not outcome.duplicate), 'activity_recorded':recorded,
                     'already_sent':bool(outcome.success and outcome.duplicate),
                     'duplicate':bool(outcome.duplicate),'state':outcome.state,'reason':outcome.reason}
         if action=='dynamic':
@@ -213,7 +222,10 @@ class Host:
             if not re.fullmatch(r'BV[0-9A-Za-z]{10}',bvid):
                 raise ValueError('Invalid BV ID')
             if await self.runtime._seen_video_record(bvid):
-                return await self.runtime._watch_video_and_save_memory(bvid, memory_source='native_life')
+                result = await self.runtime._watch_video_and_save_memory(bvid, memory_source='native_life')
+                from .core.activity_history import record_browse
+                result['activity_recorded'] = record_browse(self.home/'bilibili', 'browse:'+str(args.get('_native_round') or uuid.uuid4().hex)+':'+bvid, bvid, result)
+                return result
             result={}
             async def watch():
                 value=await self.runtime._watch_video_and_save_memory(bvid, memory_source='native_life')
@@ -223,13 +235,19 @@ class Host:
                 key='native_watch:'+datetime.now().strftime('%Y-%m-%d')+':'+bvid,
                 kind='proactive_watch',event_key='native_life_watch:'+bvid,target_id=bvid,
                 metadata={'native_round':str(args.get('_native_round') or '')}),watch)
-            return result or {'skipped':True,'reason':outcome.reason}
+            result = result or {'skipped':True,'reason':outcome.reason}
+            from .core.activity_history import record_browse
+            result['activity_recorded'] = record_browse(self.home/'bilibili', 'browse:'+str(args.get('_native_round') or uuid.uuid4().hex)+':'+bvid, bvid, result)
+            return result
         raise ValueError('Unknown native life action')
 
     async def control(self,args):
         action=args.get('action','status')
         if action=='status':
+            from .core.activity_history import daily_usage
+            from datetime import datetime
             return {'running':self.runtime._running,'credentials_present':self.runtime._has_cookie(),
+                    'daily_usage':daily_usage(self.home/'bilibili',self.runtime.config,datetime.now().strftime('%Y-%m-%d')),
                     'limits':effective_limits(self.runtime.config)[0],'social_limits':effective_limits(self.runtime.config)[1],'memory_backend':'hermes','reply_engine':'hermes_agent','scheduler':'hermes_cron','native_life_enabled':bool(self.runtime.config.get('NATIVE_LIFE_ENABLED')),'video_subtitles_only':bool(self.runtime.config.get('VIDEO_SUBTITLES_ONLY')),'live_enabled':bool(self.runtime.config.get('ENABLE_LIVE_DANMAKU_REPLY')),
                     'live_room_id':self.runtime._live_room_id(),
                     'live_running':bool(self.runtime._live_danmaku_task and not self.runtime._live_danmaku_task.done()),'tools':[t.name for t in self.runtime.context.tools]}

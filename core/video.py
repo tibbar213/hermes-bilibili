@@ -196,7 +196,7 @@ class VideoMixin(VideoInspectionMixin):
                 )
                 if analysis_info.get("_subtitle_skipped"):
                     evidence = video_evidence("metadata", available=bool(video_description))
-                    return {"ok": False, "inferred": bool(video_description), "bvid": actual_bvid,
+                    return {"ok": False, "inferred": bool(video_description), "bvid": actual_bvid, "video_info": dict(vi),
                             **evidence,
                             "message": f"[{evidence['heading']}]\n{evidence['evidence_note']}\n"
                             + (video_description or "未标记为已观看")}
