@@ -7,7 +7,7 @@ import time
 
 JOB_NAMES = {'life':'fish-life', 'maintenance':'fish-home-maintenance'}
 LIFE_PROMPT = '''这是你的自主生活时间，不是别人委托的服务器任务。沿用 SOUL.md 和共同记忆，自然地生活。
-先调用 fish_read(action=state)。可以搜索互联网、找感兴趣的B站视频并读取字幕；没有字幕就跳过。
+先调用 fish_read(action=state)。可以搜索互联网、找感兴趣的B站视频并读取可靠字幕。不下载视频、不抽帧。无可靠字幕时可根据标题、简介、弹幕和评论推测，但必须明确是观众说法或推测，不能声称看过视频、核实视频结论，也不能把推测记成已观看的经历或长期事实。
 自行决定是否看、看什么，不为完成指标凑数。新看B站视频必须调用 fish_life(action=watch,bvid=...)，每天最多3个。
 有真实的新体验时可通过 fish_life(action=dynamic,text=...) 发一条B站动态，每天最多1条。
 只有 state 显示最近有活动的已授权QQ群，才考虑通过 fish_life(action=qq_chat,group=...,text=...) 自然聊一句或分享发现；每群每天最多2次，至少间隔3小时。不发状态报告、工单标题或运营文案。

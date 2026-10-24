@@ -678,7 +678,6 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                     match.group(1),
                     memory_source="private_tool",
                     force_rewatch=force_rewatch,
-                    allow_media=True,
                 )
                 if result.get("ok"):
                     return str(result.get("message") or "已完成视频读取。")
@@ -1399,6 +1398,8 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                         "不要再说还没看或以后再看】\n"
                         + watch_result["message"]
                     )
+                elif watch_result.get("inferred"):
+                    reply_content += "\n\n【以下只是根据外围资料推测，未实际观看，不要声称看完】\n" + watch_result["message"]
                 else:
                     reply_content += (
                         "\n\n【本次尝试观看失败，请如实说明暂时没能读取，"

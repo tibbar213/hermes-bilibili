@@ -255,7 +255,7 @@ def test_live_background_uses_bilibili_scope_not_qq_owner_grant():
 
 
 @pytest.mark.parametrize('subtitle',['','可靠字幕正文'])
-def test_subtitles_only_never_uses_visual_or_title_fallback(subtitle):
+def test_subtitles_only_never_uses_visual_even_for_inference(subtitle):
     from hermes_bili_test.core.video import VideoMixin
     native=SimpleNamespace(config={'VIDEO_SUBTITLES_ONLY':True},
         _build_joint_context=AsyncMock(return_value={'subtitle':subtitle}),
@@ -268,8 +268,9 @@ def test_subtitles_only_never_uses_visual_or_title_fallback(subtitle):
         assert result=='字幕摘要' and info['analysis_basis']=='subtitles'
         native._analyze_video_text.assert_awaited_once()
     else:
-        assert result is None and info['_subtitle_skipped']
-        native._analyze_video_text.assert_not_awaited()
+        assert result=='字幕摘要' and info['_subtitle_skipped']
+        assert info['analysis_basis']=='metadata'
+        native._analyze_video_text.assert_awaited_once()
 
 
 def test_skipped_video_is_not_cached_or_marked_seen():
@@ -321,20 +322,64 @@ def test_summary_admitting_no_content_is_not_watched():
     native._analyze_video_media.assert_not_awaited()
 
 
-@pytest.mark.parametrize('media', ['实际观察到的画面',None])
-def test_explicit_watch_can_try_media_but_never_metadata_fallback(media):
+def test_no_subtitle_inference_never_becomes_watched_cache():
+    from hermes_bili_test.core.video import VideoMixin
+    from unittest.mock import Mock
+    async def infer(info):
+        info.update(analysis_basis='metadata',_subtitle_skipped=True)
+        return '仅根据观众评论推测'
+    native=SimpleNamespace(_video_analysis_lock=lambda bvid:asyncio.Lock(),
+        _cached_video_memory=lambda bvid:None,_seen_video_record=AsyncMock(return_value=None),
+        _analyze_video_with_vision_inner=infer,
+        _save_json=Mock(side_effect=AssertionError('inference must not become watched cache')))
+    assert asyncio.run(VideoMixin._analyze_video_with_vision_impl(native,{'bvid':'BV-fixture'}))=='仅根据观众评论推测'
+    native._save_json.assert_not_called()
+
+
+def test_old_media_flag_cannot_enable_download_or_frames():
     from hermes_bili_test.core.video import VideoMixin
     native=SimpleNamespace(config={'VIDEO_SUBTITLES_ONLY':True},
         _build_joint_context=AsyncMock(return_value={'subtitle':''}),
-        _should_use_visual_video_analysis=lambda joint:True,
-        _analyze_video_media=AsyncMock(return_value=media),
-        _merge_visual_and_joint=AsyncMock(return_value=media),
-        _clip_media_text=VideoMixin._clip_media_text,
-        _analyze_video_text=AsyncMock(side_effect=AssertionError('no metadata summary')))
+        _analyze_video_media=AsyncMock(side_effect=AssertionError('no video processing')),
+        _analyze_video_text=AsyncMock(return_value='推测，未观看'))
     info={'_allow_video_media':True}
     result=asyncio.run(VideoMixin._analyze_video_with_vision_inner(native,info))
-    native._analyze_video_media.assert_awaited_once()
-    assert result==media
-    assert info['analysis_basis']==('video_media' if media else 'metadata')
-    if not media:
-        assert info['_subtitle_skipped']
+    native._analyze_video_media.assert_not_awaited()
+    assert result=='推测，未观看' and info['_subtitle_skipped']
+    assert asyncio.run(VideoMixin._analyze_video_media(native,info)) is None
+
+
+def test_danmaku_sample_is_bounded_and_rejects_entities():
+    import zlib
+    from hermes_bili_test.core.bilibili import BilibiliAPIMixin
+    parse=BilibiliAPIMixin._parse_video_danmaku
+    xml=('<i>'+''.join('<d>'+str(i)+'</d>' for i in range(100))+'</i>').encode()
+    assert len(parse(xml))==20
+    compressor=zlib.compressobj(wbits=-15)
+    assert parse(compressor.compress(xml)+compressor.flush())==parse(xml)
+    assert parse(b'<!DOCTYPE i [<!ENTITY x "bad">]><i><d>&x;</d></i>')==[]
+    assert parse(b'x'*(256*1024+1))==[]
+
+
+def test_inferred_video_response_is_not_rated_or_marked_seen():
+    from hermes_bili_test.core.video import VideoMixin
+    from unittest.mock import Mock
+    async def infer(info):
+        info.update(analysis_basis='metadata',_subtitle_skipped=True)
+        return '【仅根据评论推测】可能讨论模型量化'
+    native=SimpleNamespace(_get_video_oid=AsyncMock(return_value=1),
+        _get_video_info=AsyncMock(return_value={'bvid':'BVfixture','title':'量化'}),
+        _cached_video_memory=lambda bvid:None,_load_json=lambda *args:{},
+        _compact_video_cache=lambda cache:False,
+        _analysis_has_subtitle_mismatch=VideoMixin._analysis_has_subtitle_mismatch,
+        _seen_video_record=AsyncMock(return_value=None),
+        _analyze_video_with_vision=infer,_clip_media_text=VideoMixin._clip_media_text,
+        _evaluate_video=AsyncMock(side_effect=AssertionError('inference is not watched')),
+        _mark_video_seen=AsyncMock(side_effect=AssertionError('inference is not watched')),
+        _save_json=Mock(side_effect=AssertionError('no watched cache')))
+    result=asyncio.run(VideoMixin._watch_video_and_save_memory(native,'BVfixture'))
+    assert result['inferred'] and not result['ok'] and not result['content_analyzed']
+    assert '推测' in result['message']
+    native._evaluate_video.assert_not_awaited()
+    native._mark_video_seen.assert_not_awaited()
+    native._save_json.assert_not_called()

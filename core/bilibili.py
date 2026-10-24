@@ -500,6 +500,51 @@ class BilibiliAPIMixin:
             pass
         return []
 
+    @staticmethod
+    def _parse_video_danmaku(data):
+        """Small, bounded sample of viewer comments; never treat it as subtitles."""
+        import zlib
+        import xml.etree.ElementTree as ET
+        maximum = 256 * 1024
+        if len(data) > maximum:
+            return []
+        try:
+            if not data.lstrip().startswith(b'<'):
+                data = zlib.decompressobj(-zlib.MAX_WBITS).decompress(data, maximum + 1)
+            if len(data) > maximum or b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():
+                return []
+            parser = ET.XMLPullParser(events=('end',))
+            parser.feed(data.decode('utf-8', errors='replace'))
+            rows = []
+            for _, element in parser.read_events():
+                text = ' '.join((element.text or '').split())[:100]
+                if element.tag == 'd' and text and text not in rows:
+                    rows.append(text)
+                    if len(rows) >= 20:
+                        break
+            return rows
+        except (ValueError, zlib.error, ET.ParseError):
+            return []
+
+    async def _get_video_danmaku(self, cid):
+        if not str(cid).isdigit() or int(cid) <= 0:
+            return []
+        try:
+            async with plugin_http_session(self.config) as session:
+                async with session.get('https://api.bilibili.com/x/v1/dm/list.so',
+                        params={'oid': str(cid)}, headers={'User-Agent': USER_AGENT},
+                        timeout=aiohttp.ClientTimeout(total=8)) as response:
+                    if response.status != 200:
+                        return []
+                    body = bytearray()
+                    async for chunk in response.content.iter_chunked(16384):
+                        body.extend(chunk)
+                        if len(body) > 256 * 1024:
+                            return []
+            return self._parse_video_danmaku(bytes(body))
+        except (aiohttp.ClientError, TimeoutError, OSError):
+            return []
+
     async def _get_hot_comments(self, oid, limit=10):
         try:
             d, _ = await self._http_get("https://api.bilibili.com/x/v2/reply/main", params={"oid": oid, "type": 1, "mode": 3, "ps": limit})
