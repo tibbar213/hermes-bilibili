@@ -446,3 +446,26 @@ def test_native_reply_uses_persona_and_lets_agent_ignore_short_messages(monkeypa
     assert '哈哈' in prompt and '自行决定 reply、ignore 或 observe' in prompt
     assert llm.call_args.kwargs['system_prompt']=='Hermes persona'
     native._get_level_prompts.assert_not_called()
+
+
+def test_activity_overview_keeps_dynamic_body_beyond_fifty_characters():
+    from hermes_bili_test.core.memory_api import BiliBotMemoryAPI
+    from hermes_bili_test.core.config import DYNAMIC_LOG_FILE
+    body = "前半段" * 25 + "后半段是有意义的结论，不能静默截掉"
+    def load(path, default):
+        return [{"time": "2026-10-24 10:02", "text": body}] if path == DYNAMIC_LOG_FILE else default
+    api = BiliBotMemoryAPI(SimpleNamespace(_load_json=load))
+    result = api.activity_overview("2026-10-24")
+    assert body in result
+    assert "看了" not in result
+    assert "没有任何活动记录" in api.activity_overview("2026-10-23")
+
+
+def test_activity_overview_marks_oversized_dynamic_truncation():
+    from hermes_bili_test.core.memory_api import BiliBotMemoryAPI
+    from hermes_bili_test.core.config import DYNAMIC_LOG_FILE
+    def load(path, default):
+        return [{"time": "2026-10-24 10:02", "text": "长" * 1100}] if path == DYNAMIC_LOG_FILE else default
+    result = BiliBotMemoryAPI(SimpleNamespace(_load_json=load)).activity_overview("2026-10-24")
+    assert "长" * 1000 in result and "长" * 1001 not in result
+    assert "已截断" in result

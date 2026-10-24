@@ -871,7 +871,11 @@ def create_tools(plugin):
         name: str = "bili_recall"
         description: str = (
             "Recall Bilibili event history (long-term facts are in Hermes memory). Select user profile, conversation, today's activity, "
-            "watched video, dynamic/post, or bangumi memory. Call once per topic."
+            "watched video, dynamic/post, or bangumi memory. For your own activities on a date, use today first; "
+            "query must be empty (today) or exactly YYYY-MM-DD. Other categories require a specific keyword. "
+            "Report the available evidence and missing records honestly; an empty search is not a tool failure. "
+            "Do not repeatedly rephrase empty searches or search other dates without a reason. "
+            "A posted dynamic alone does not prove that its source video was watched."
         )
         parameters: dict = Field(default_factory=lambda: {
             "type": "object",

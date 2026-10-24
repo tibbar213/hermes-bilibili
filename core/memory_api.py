@@ -213,7 +213,8 @@ class BiliBotMemoryAPI:
             for item in dynamics[-10:]:
                 lines.append(
                     f"  [{item.get('time', '?').split(' ', 1)[-1]}] "
-                    f"{(item.get('content') or item.get('text') or '')[:50]}"
+                    f"{(item.get('content') or item.get('text') or '')[:1000]}"
+                    + (" [正文超出1000字，已截断]" if len(item.get('content') or item.get('text') or '') > 1000 else "")
                 )
             parts.append("\n".join(lines))
         if not parts:
