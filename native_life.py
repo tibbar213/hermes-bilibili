@@ -6,7 +6,7 @@ import sqlite3
 import time
 from .settings import LIMITS, SOCIAL_LIMITS, Config, effective_limits
 
-JOB_NAMES = {'life':'fish-life', 'maintenance':'fish-home-maintenance'}
+JOB_NAMES = {'life':'fish-life', 'maintenance':'fish-home-maintenance', 'reflection':'fish-self-reflection'}
 LIFE_PROMPT = f'''这是你的自主生活时间，不是别人委托的服务器任务。沿用 SOUL.md 和共同记忆，自然地生活。
 先调用 fish_read(action=state)。可以搜索互联网、找感兴趣的B站视频并读取可靠字幕。不下载视频、不抽帧。无可靠字幕时可根据标题、简介、弹幕和评论推测，但必须明确是观众说法或推测，不能声称看过视频、核实视频结论，也不能把推测记成已观看的经历或长期事实。
 选片有三个来源：fish_read(action=home_feed) 获取当前登录账号的首页推荐，fish_read(action=following_feed) 获取关注UP近期更新的视频，可用 days 指定1至30天，fish_read(action=bilibili,query=...) 主动搜索。每轮先看看首页推荐和关注更新，结合自己的兴趣、共同记忆、标题及简介挑片；不要只追热度或固定一个关键词。候选提供 seen 标记，通常选没看过的，确有需要可以重访；include_seen=false 可只取未看过的。标题/简介不是视频正文；没有合适的再搜索，接口不可用或候选为空就换来源，不要反复空刷或编造推荐。来源无需机械平均分配，也不用凑满三个视频。
@@ -39,8 +39,12 @@ def install_jobs():
     state = jobs_state()
     existing = {j.get('name'):j for j in list_jobs(include_disabled=True)}
     owner = str(plugin_settings().get('owner_qq') or '')
-    for kind, prompt, schedule in [('life',LIFE_PROMPT,'0 8-22/2 * * *'),
-                                   ('maintenance',MAINTENANCE_PROMPT,'30 3 * * *')]:
+    definitions = [('life',LIFE_PROMPT,'0 8-22/2 * * *'),
+                   ('maintenance',MAINTENANCE_PROMPT,'30 3 * * *')]
+    if Config(home()).get('SELF_GROWTH_ENABLED',False):
+        from .self_growth import REFLECTION_PROMPT
+        definitions.append(('reflection',REFLECTION_PROMPT,'10 23 * * *'))
+    for kind, prompt, schedule in definitions:
         job_id = state['jobs'].get(kind)
         if job_id and get_job(job_id):
             continue  # Keep owner changes, including pauses and schedule edits.
@@ -89,6 +93,10 @@ def observe_group_activity(platform='', **kwargs):
 
 def read(args, **kwargs):
     action = args.get('action','state')
+    if action == 'experiences':
+        from .self_growth import require_identity,experiences
+        require_identity(home())
+        return json.dumps(experiences(home()),ensure_ascii=False)
     if action in {'home_feed','following_feed'}:
         from .host import handler
         return handler('bili_feed')({**{k:args[k] for k in ('days','include_seen','limit') if k in args},
@@ -146,6 +154,11 @@ async def act(args):
     if execution:
         args['_native_round'] = execution.execution_id
     action = args.get('action')
+    if action == 'evolve':
+        from .self_growth import evolve
+        return evolve(home(),args)
+    if execution and execution.job_id == jobs_state()['jobs'].get('reflection'):
+        raise PermissionError('Self reflection cannot send social messages or operate accounts')
     h = host()
     if action in {'watch','comment','dynamic','maintain','remember'}:
         return await asyncio.to_thread(h.submit,h.life_action(args))
@@ -179,6 +192,10 @@ async def act(args):
 def handle(args, **kwargs):
     try:
         return json.dumps(asyncio.run(act(args)),ensure_ascii=False)
+    except ValueError as exc:
+        if args.get('action')=='evolve':
+            return json.dumps({'error':'growth_validation','reason':str(exc)},ensure_ascii=False)
+        return json.dumps({'error':'自主活动参数无效','type':type(exc).__name__},ensure_ascii=False)
     except Exception as exc:
         return json.dumps({'error':'自主活动没有完成；请查看主人私聊或原生任务记录','type':type(exc).__name__},ensure_ascii=False)
 
@@ -186,9 +203,9 @@ def handle(args, **kwargs):
 def register(ctx):
     ctx.register_hook('pre_llm_call',observe_group_activity)
     ctx.register_tool(name='fish_read',toolset='fish_read',handler=read,
-        schema={'name':'fish_read','description':'阅读公开互联网/B站：home_feed 看登录账号首页推荐，following_feed 看关注UP近期视频（days默认7，最多30天），bilibili 按query搜索，state 查看自己的任务和授权群活动状态。候选标题不是已观看正文。',
-                'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['state','web','bilibili','home_feed','following_feed']},'query':{'type':'string'},'days':{'type':'integer','minimum':1,'maximum':30},'include_seen':{'type':'boolean','description':'默认true，候选带seen标记'},'limit':{'type':'integer','minimum':1,'maximum':12}},'required':['action']}})
+        schema={'name':'fish_read','description':'阅读公开互联网/B站：home_feed 看登录账号首页推荐，following_feed 看关注UP近期视频（days默认7，最多30天），bilibili 按query搜索，state 查看自己的任务和授权群活动状态；experiences 仅原生自身任务/主人回顾真实经历。候选标题不是已观看正文。',
+                'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['state','web','bilibili','home_feed','following_feed','experiences']},'query':{'type':'string'},'days':{'type':'integer','minimum':1,'maximum':30},'include_seen':{'type':'boolean','description':'默认true，候选带seen标记'},'limit':{'type':'integer','minimum':1,'maximum':12}},'required':['action']}})
     ctx.register_tool(name='fish_life',toolset='fish_life',handler=handle,
-        schema={'name':'fish_life','description':'仅自己的原生生活任务或真实主人：watch读视频字幕；comment在指定视频下评论；dynamic发动态；qq_chat在白名单群自然聊天或分享视频；maintain维护缓存；remember记录新事实。没有服务器操作权限。',
-                'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['watch','comment','dynamic','qq_chat','maintain','remember']},
-                    'bvid':{'type':'string'},'text':{'type':'string'},'group':{'type':'string'}},'required':['action']}})
+        schema={'name':'fish_life','description':'仅自己的原生生活任务或真实主人：watch读视频字幕；comment在指定视频下评论；dynamic发动态；qq_chat在白名单群自然聊天或分享视频；maintain维护缓存；remember记录新事实；evolve仅已验证的自我回顾任务/主人更新SOUL成长段落（需growth、evidence_ids、expected_revision）。没有服务器操作权限。',
+                'parameters':{'type':'object','properties':{'action':{'type':'string','enum':['watch','comment','dynamic','qq_chat','maintain','remember','evolve']},
+                    'bvid':{'type':'string'},'text':{'type':'string'},'group':{'type':'string'},'growth':{'type':'string','maxLength':1200},'evidence_ids':{'type':'array','items':{'type':'string'},'maxItems':8},'expected_revision':{'type':'string'}},'required':['action']}})

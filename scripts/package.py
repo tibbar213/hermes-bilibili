@@ -11,7 +11,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 ROOT_FILES = {
     '__init__.py', 'plugin.yaml', 'config_schema.json', 'context.py', 'host.py',
-    'ipc.py', 'life_security.py', 'native_agent.py', 'native_life.py', 'native_types.py', 'runtime.py', 'settings.py', 'shared_memory.py',
+    'ipc.py', 'life_security.py', 'native_agent.py', 'native_life.py', 'native_types.py', 'runtime.py', 'settings.py', 'shared_memory.py', 'self_growth.py',
     'README.md', 'INSTALL_AGENT.md', 'LICENSE', 'NOTICE.md', 'CHANGELOG.md',
     'UPSTREAM.json', 'requirements.txt', 'requirements-dev.txt', 'pyproject.toml',
     '.gitignore', '.gitattributes',

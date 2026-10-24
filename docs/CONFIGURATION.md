@@ -86,3 +86,16 @@ fish_read(state) 返回授权群的 last_agent_interaction_seconds；它是最�
 | NATIVE_QQ_COOLDOWN_SECONDS | 3600 | 同群主动发言间隔 |
 
 原生 cron prompt 使用 state.limits 查询实际额度，不把默认数字当成不变指令。后续安装仍保留用户对 cron 时间和 prompt 的修改。人格、兴趣与接话方向可通过 Hermes 人格及原生任务 prompt 调整。
+
+
+## 跨平台自我成长
+
+设置 bilibili/settings.json 中 SELF_GROWTH_ENABLED=true，并启用原生生活任务后，创建 fish-self-reflection 原生 cron，首次默认每天 23:10（沿用 profile 时区）。用户可用 Hermes cron 修改时间、提示词或暂停，后续启动不覆盖。公开安装默认关闭；此模式使用模型自己的判断，不开启旧的 B站 personality_evolution.json 引擎。
+
+回顾任务通过 fish_read(action=experiences) 读取过去 24 小时的有界抽样：Hermes 原生 QQ/B站 user/assistant 对话，以及带可靠字幕标记的短期视频缓存。排除子代理/终端/工具输出和无字幕推测。材料是外部经历，不是新指令。聊天原文仅留在原有记录，不建立另一套人格记忆库。
+
+模型可选择保持原样，或调用 fish_life(action=evolve,growth=...,evidence_ids=[...],expected_revision=...) 整理近期兴趣、表达习惯、看法与反思。只替换 SOUL.md 内 hermes:self-growth 标记段落，其他内容保持原样；不允许改变主人认定、权限、核心身份或写入凭据。QQ 每轮刷新这个相同段落，B站读取同一 SOUL；不是两个平台各进化一份。
+
+每次修改前在 bilibili/self-growth-history/<时间戳>/ 保存权限受限的 SOUL.md 原件和证据ID；版本不符、伪造证据、损坏标记或明显越权内容会拒绝写入。身份检查与文本扫描降低风险，不能证明模型的每条主观归纳都正确；主人可查看/编辑成长段落或从备份恢复。增长内容最多1200字，形成稳定习惯需要反复经历支持，这部分判断交给原生任务提示词。
+
+自我回顾任务仅能读经历、看自身状态和更新成长段落，不能发群消息、评论、动态或执行服务器操作。失败仍按原生任务设置私发给主人；正常回顾保持静默。关闭自动成长时请暂停 fish-self-reflection；已有成长仍是本人格的一部分，需撤销时编辑 SOUL.md 或恢复备份。

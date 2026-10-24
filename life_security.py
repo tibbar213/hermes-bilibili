@@ -31,9 +31,27 @@ def guard(tool_name, args, **kwargs):
     from cron.execution_identity import current_cron_execution
     execution = current_cron_execution()
     # A damaged identity file must remove action authority, never open server/MCP access.
-    restricted_job = bool(life or (execution and getattr(execution,'job_name','') in {'fish-life','fish-home-maintenance'}))
+    restricted_job = bool(life or (execution and getattr(execution,'job_name','') in {'fish-life','fish-home-maintenance','fish-self-reflection'}))
     if not external and not restricted_job:
         return None
+    if tool_name == 'tool_call':
+        # Deferred tools are presented through a native bridge. Validate every
+        # inner call with this same policy; never grant the bridge wholesale.
+        from tools.tool_search_validation import normalize_tool_call_entries
+        entries, error = normalize_tool_call_entries(args)
+        if error:
+            return {'action':'block','message':'工具调用格式无效：'+error}
+        for entry in entries:
+            decision = guard(entry['name'],entry['arguments'],**kwargs)
+            if decision is not None:
+                return decision
+        return None
+    reflection = bool(execution and getattr(execution,'job_name','') == 'fish-self-reflection')
+    if life:
+        from .native_life import jobs_state
+        reflection = reflection or life.job_id == jobs_state()['jobs'].get('reflection')
+    if reflection and not ((tool_name=='fish_read' and args.get('action') in {'experiences','state'}) or (tool_name=='fish_life' and args.get('action')=='evolve') or tool_name in {'todo_list','tool_search','tool_describe'}):
+        return {'action':'block','message':'自我回顾仅能读经历和更新成长段落，不能发消息或操作服务器。'}
     if restricted_job and tool_name == 'watch_video':
         return {'action':'block','message':'自主看片请用 fish_life(action=watch)，统一计入本轮与全天额度。'}
     allowed = READ_TOOLS if external else LIFE_TOOLS

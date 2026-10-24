@@ -2536,5 +2536,11 @@
     "type": "int",
     "default": 3600,
     "hint": "正整数，由程序持久化强制执行；修改后重启网关生效"
+  },
+  "SELF_GROWTH_ENABLED": {
+    "description": "【原生自我成长】从QQ/B站真实经历更新共同SOUL.md的成长段落",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后使用Hermes原生每日回顾任务，保留核心身份、权限边界和修改前备份"
   }
 }

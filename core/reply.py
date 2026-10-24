@@ -241,7 +241,7 @@ class ReplyMixin(CommentContextMixin):
             mood, mp = self._get_today_mood()
             fest = self._get_festival_prompt()
             fs = f"\n特殊日期：{fest}" if fest else ""
-            pp = self._get_personality_prompt(clean_content)
+            pp = ""  # One native SOUL.md growth section replaces the legacy Bili-only personality layer.
             pps = f"\n{pp}" if pp else ""
             now = datetime.now().strftime("%Y-%m-%d %H:%M")
             comment_text = self._wrap_user_content(clean_content)

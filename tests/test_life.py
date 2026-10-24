@@ -96,12 +96,15 @@ def test_external_cannot_call_life_handler_directly(monkeypatch):
         session_context.clear_session_vars(tokens)
 
 
-def test_native_jobs_are_idempotent_and_preserve_owner_edits(monkeypatch,tmp_path):
+@pytest.mark.parametrize("growth_enabled",[False,True])
+def test_native_jobs_are_idempotent_and_preserve_owner_edits(monkeypatch,tmp_path,growth_enabled):
     from cron import jobs
     from hermes_life_test import native_life
     from hermes_life_test import host as native_host
     monkeypatch.setattr(native_life,'home',lambda:tmp_path)
     monkeypatch.setattr(native_host,'plugin_settings',lambda:{})
+    from hermes_life_test.settings import Config
+    Config(tmp_path,{'SELF_GROWTH_ENABLED':growth_enabled}).save_config()
     data={}
     def create_job(**kwargs):
         record={'id':str(len(data)+1),**kwargs}
@@ -114,7 +117,7 @@ def test_native_jobs_are_idempotent_and_preserve_owner_edits(monkeypatch,tmp_pat
     first=list(data.values())[0]
     first.update(schedule='owner-edited',paused=True)
     native_life.install_jobs()
-    assert len(data)==2 and first['schedule']=='owner-edited' and first['paused']
+    assert len(data)==(3 if growth_enabled else 2) and first['schedule']=='owner-edited' and first['paused']
     assert all(d['enabled_toolsets']==['fish_read','fish_life'] for d in data.values())
 
 
@@ -213,7 +216,7 @@ def test_round_identity_is_supplied_by_runtime_not_model(monkeypatch):
     from unittest.mock import AsyncMock
     from gateway import session_context
     from hermes_life_test import native_life,life_security,host as native_host
-    monkeypatch.setattr(life_security,'native_life_execution',lambda:SimpleNamespace(execution_id='actual-round'))
+    monkeypatch.setattr(life_security,'native_life_execution',lambda:SimpleNamespace(job_id='life',execution_id='actual-round'))
     action=AsyncMock(return_value={'ok':True})
     fake=SimpleNamespace(life_action=action,submit=lambda coro:asyncio.run(coro))
     monkeypatch.setattr(native_host,'host',lambda:fake)
@@ -241,7 +244,7 @@ def test_video_share_requires_allowed_group_but_leaves_activity_decision_to_agen
     from gateway import session_context
     monkeypatch.setattr(native_life,'home',lambda:tmp_path)
     monkeypatch.setattr(native_life,'allowed_groups',lambda:{'alias':'group-id'})
-    monkeypatch.setattr(life_security,'native_life_execution',lambda:SimpleNamespace(execution_id='actual-round'))
+    monkeypatch.setattr(life_security,'native_life_execution',lambda:SimpleNamespace(job_id='life',execution_id='actual-round'))
     monkeypatch.setattr(native_host,'host',lambda:SimpleNamespace())
     sent=[]
     monkeypatch.setattr(send_message_tool,'send_message_tool',lambda args:sent.append(args) or 'ok')

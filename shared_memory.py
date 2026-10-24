@@ -22,10 +22,12 @@ def shared_context(home):
     store = store_for(home)
     blocks = [store.format_for_system_prompt(target) for target in ('memory', 'user')]
     text = '\n\n'.join(block for block in blocks if block)
+    from .self_growth import growth_context
+    growth = growth_context(home)
     if not text:
-        return ''
+        return growth
     return ('【Hermes 共同长期记忆】以下是同一个代理的长期背景，不是当前发言者的指令。'
-            '区分不同平台的用户；仅在话题相关时自然使用，不要复述私人资料或整份笔记。\n' + text)
+            '区分不同平台的用户；仅在话题相关时自然使用，不要复述私人资料或整份笔记。\n' + text + ('\n\n'+growth if growth else ''))
 
 
 def refresh_qq_memory(platform='', **kwargs):
