@@ -44,7 +44,8 @@ def record_browse(data_dir, key, bvid, result, *, at=None):
             status = 'basis_unknown' if result.get('ok') else 'unavailable'
     return record_activity(data_dir, key=key, kind='browse', status=status, bvid=bvid,
         title=info.get('title', ''), analysis_basis=result.get('analysis_basis', 'unknown'),
-        from_cache=result.get('from_cache', False), note=result.get('evidence_note') or result.get('reason') or '', at=at)
+        from_cache=result.get('from_cache', False), text=result.get('analysis') or result.get('summary') or result.get('message') or '',
+        note=result.get('evidence_note') or result.get('reason') or '', at=at)
 
 
 def list_activity(data_dir, date, *, kind='all', limit=30):
@@ -83,5 +84,7 @@ def daily_usage(data_dir, config, date):
     report['global'] = {'used': counts.get('behavior:global:day', 0),
                         'limit': budget._int('BEHAVIOR_GLOBAL_DAILY_LIMIT', 200) if config.get('BEHAVIOR_BUDGET_ENABLED', True) else None}
     from .request_guard import guard_status
+    from .traffic_guard import traffic_status
     return {'date': date, 'usage': report, 'request_guard_now':guard_status(data_dir,config),
+            'traffic_now':traffic_status(data_dir,config),
             'note': '预算统计保留已确认和未确认操作，已退额失败不计入；回复发送节流单独统计实际请求尝试，失败也不退还节流名额。浏览流水条数不等于已用看片额度。每日不限的回复不占总日预算，每分钟限速仍保留。'}

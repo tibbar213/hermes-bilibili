@@ -4,6 +4,106 @@ import re
 from urllib.parse import unquote, urlsplit, urlunsplit
 
 import aiohttp
+import asyncio
+import sys
+
+
+class _GuardedResponse:
+    def __init__(self, response, context):
+        self._response, self._context = response, context
+
+    def __getattr__(self, name):
+        return getattr(self._response, name)
+
+    async def json(self, *args, **kwargs):
+        payload = await self._response.json(*args, **kwargs)
+        from .traffic_guard import RISK_CODES, risk_pause, mark_success
+        from .request_guard import BilibiliPaused
+        code = payload.get('code') if isinstance(payload, dict) else None
+        endpoint = urlsplit(str(self._response.url)).path
+        if code in RISK_CODES:
+            risk_pause(self._context.directory, endpoint, self._response.headers.get('Retry-After'))
+            self._context.state = 'failed'
+            raise BilibiliPaused('B站返回风控码，请求已递增暂停，不立即重试')
+        if self._response.status < 400 and (code is None or code == 0):
+            self._context.state = 'accepted'
+            data = payload.get('data') or {} if isinstance(payload,dict) else {}
+            if isinstance(data,dict):
+                self._context.rpid = data.get('rpid') or (data.get('reply') or {}).get('rpid') or ''
+            mark_success(self._context.directory, endpoint)
+            if self._context.method=='POST' and endpoint=='/x/v2/reply/add' and code==0:
+                # Receipt failure must never turn an accepted write into a retry.
+                try:
+                    from .comment_delivery import record_comment
+                    record_comment(self._context.directory,self._context.token,self._context.kwargs.get('data'),payload)
+                except Exception:
+                    import logging
+                    logging.getLogger('hermes_bilibili').warning('评论已受理，但本地回执未保存；不要重发')
+        else:
+            self._context.state = 'failed'
+        return payload
+
+
+class _GuardedRequest:
+    def __init__(self,session,config,method,url,kwargs):
+        from .request_guard import data_directory
+        self.session,self.config,self.method,self.url,self.kwargs=session,config,method,url,kwargs
+        self.directory=data_directory(config)
+        self.state,self.rpid,self.token='unknown','',None
+        self.response=None
+
+    async def __aenter__(self):
+        from .traffic_guard import acquire,release,risk_pause
+        from .request_guard import BilibiliPaused
+        self.token=await acquire(self.directory,self.config,self.url,self.method,self.kwargs.get('data',self.kwargs.get('json')))
+        try:
+            # The persistent lease exceeds this complete request/body deadline.
+            self.deadline=asyncio.timeout(45)
+            await self.deadline.__aenter__()
+            self.kwargs['allow_redirects']=False
+            self.response=await self.session.request(self.method,self.url,**self.kwargs)
+            if self.response.status in {412,429}:
+                risk_pause(self.directory,urlsplit(str(self.url)).path,self.response.headers.get('Retry-After'))
+                self.state='failed'
+                raise BilibiliPaused('B站返回 HTTP 412/429，请求已递增暂停，不立即重试')
+            return _GuardedResponse(self.response,self)
+        except BaseException:
+            error = sys.exc_info()
+            if self.response is not None:
+                self.response.release()
+            release(self.directory,self.token,self.state,self.rpid)
+            if hasattr(self,'deadline'):
+                await self.deadline.__aexit__(*error)
+            raise
+
+    async def __aexit__(self,kind,value,tb):
+        from .traffic_guard import release
+        try:
+            if self.response is not None:
+                self.response.release()
+            release(self.directory,self.token,self.state,self.rpid)
+        finally:
+            await self.deadline.__aexit__(kind,value,tb)
+        return False
+
+
+class _GuardedSession:
+    def __init__(self,session,config,proxy=''):
+        self.session,self.config,self.proxy=session,config,proxy
+
+    def _request(self,method,url,kwargs):
+        from .request_guard import is_bilibili_url
+        if self.proxy:
+            kwargs={**kwargs,'proxy':self.proxy}
+        if is_bilibili_url(url):
+            return _GuardedRequest(self.session,self.config,method,url,kwargs)
+        return self.session.request(method,url,**kwargs)
+
+    def get(self,url,**kwargs):
+        return self._request('GET',url,kwargs)
+
+    def post(self,url,**kwargs):
+        return self._request('POST',url,kwargs)
 
 
 def normalize_proxy_url(value):
@@ -73,19 +173,7 @@ class _ProxySession:
 @asynccontextmanager
 async def plugin_http_session(config):
     proxy = configured_proxy(config)
-    from .request_guard import is_bilibili_url, data_directory, check_pause, pause_requests, BilibiliPaused
-    trace = aiohttp.TraceConfig()
-    async def before_request(session, context, params):
-        if is_bilibili_url(params.url):
-            check_pause(data_directory(config))
-    async def after_request(session, context, params):
-        if is_bilibili_url(params.response.url) and params.response.status in {412, 429}:
-            pause_requests(data_directory(config))
-            params.response.release()
-            raise BilibiliPaused(f'B站返回 HTTP {params.response.status}，请求已暂停300秒，不立即重试')
-    trace.on_request_start.append(before_request)
-    trace.on_request_end.append(after_request)
-    options = {'trace_configs':[trace]}
+    options = {}
     if proxy.startswith("socks5://"):
         try:
             from aiohttp_socks import ProxyConnector
@@ -94,7 +182,7 @@ async def plugin_http_session(config):
         options["connector"] = ProxyConnector.from_url(proxy, rdns=True)
     try:
         async with aiohttp.ClientSession(**options) as session:
-            yield _ProxySession(session, proxy) if proxy.startswith(("http://", "https://")) else session
+            yield _GuardedSession(session,config,proxy if proxy.startswith(("http://", "https://")) else '')
     except (aiohttp.ClientError, OSError) as exc:
         if not proxy:
             raise

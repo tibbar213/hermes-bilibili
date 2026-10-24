@@ -2,6 +2,7 @@
 import sqlite3
 import time
 import uuid
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -25,6 +26,7 @@ def data_directory(config):
     return Path(directory)
 
 
+@contextmanager
 def _connect(directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
@@ -32,7 +34,14 @@ def _connect(directory):
     db.execute('CREATE TABLE IF NOT EXISTS request_guard (key TEXT PRIMARY KEY,value REAL NOT NULL)')
     db.execute('CREATE TABLE IF NOT EXISTS reply_dispatch (id TEXT PRIMARY KEY,at REAL NOT NULL,day TEXT NOT NULL,state TEXT NOT NULL)')
     db.execute('CREATE INDEX IF NOT EXISTS reply_dispatch_at ON reply_dispatch(at)')
-    return db
+    try:
+        yield db
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
+    finally:
+        db.close()
 
 
 def check_pause(directory, *, at=None):

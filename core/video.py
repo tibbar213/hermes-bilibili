@@ -221,6 +221,8 @@ class VideoMixin(VideoInspectionMixin):
                     "owner_mid": str(vi.get("owner_mid", "")),
                     "tname": vi.get("tname", ""),
                     "analysis": video_description,
+                    "subtitle_reading": analysis_info.get('subtitle_reading',{}),
+                    "subtitle_evidence": analysis_info.get('subtitle_evidence',{}),
                     "summary": self._clip_media_text(video_description, 220),
                     "score": score,
                     "score_reason": score_reason,
@@ -258,6 +260,8 @@ class VideoMixin(VideoInspectionMixin):
             )
             share_info = dict(vi)
             share_info.update({"bvid": actual_bvid, "aid": oid, "oid": oid})
+            share_info['subtitle_reading'] = analysis_info.get('subtitle_reading') or cached.get('subtitle_reading') or {'status':'legacy_unknown','complete':False}
+            share_info['subtitle_evidence'] = analysis_info.get('subtitle_evidence') or cached.get('subtitle_evidence') or {}
             return {
                 "ok": True,
                 "message": message,
@@ -313,7 +317,7 @@ class VideoMixin(VideoInspectionMixin):
 视频简介：{str(video_info.get('desc', '') or '')[:350]}
 视频分区：{video_info.get('tname', '')}
 补充信息：{str(extra or '')[:500]}
-候选字幕：{subtitle_text[:1000]}"""
+候选字幕抽样（开头、中间、结尾）：{subtitle_text[:500]}\n{subtitle_text[max(0,len(subtitle_text)//2-250):len(subtitle_text)//2+250]}\n{subtitle_text[-500:]}"""
         try:
             result = await getattr(self, "_summary_llm_call", self._llm_call)(prompt, max_tokens=100)
             if not result:
@@ -348,9 +352,15 @@ class VideoMixin(VideoInspectionMixin):
         subtitle_text = await self._validate_video_subtitle(
             video_info, subtitle_text, extra
         )
+        video_info['subtitle_evidence'] = {**getattr(self, '_subtitle_receipts', {}).get(str(video_info.get('bvid','')), {}),'validated':bool(subtitle_text)}
         subtitle_section = ""
         if subtitle_text:
-            subtitle_section = f"\n候选字幕内容：{subtitle_text[:1500]}"
+            from .subtitles import subtitle_context
+            prepared = await subtitle_context(self, video_info, subtitle_text)
+            if prepared:
+                subtitle_section = f"\n已取得字幕内容（可能不覆盖无字幕片段）：{prepared}"
+            else:
+                subtitle_text = ""
         has_comments = "热门评论" in extra
         joint_hint = ""
         if subtitle_text or has_comments:
@@ -372,7 +382,7 @@ class VideoMixin(VideoInspectionMixin):
     async def _merge_visual_and_joint(self, video_info, visual_summary, joint):
         """视觉分析结果与字幕/热评做最终联合整合。"""
         visual_summary = self._clip_media_text(visual_summary, 1200)
-        subtitle = self._clip_media_text(joint.get("subtitle", ""), 1800)
+        subtitle = joint.get("subtitle", "")
         extra = self._clip_media_text(joint.get("extra", ""), 1200)
         prompt = f"""以下是关于B站视频《{video_info.get('title', '未知')}》（UP主：{video_info.get('owner_name', video_info.get('up_name', '未知'))}）的多维信息，请整合为一段完整的内容概括（500字以内）：
 
@@ -1216,6 +1226,7 @@ UP主：{video_info.get('up_name') or video_info.get('owner_name', '未知')}
         logger.info(f"[BiliBot] 📹 分析结果：{analysis[:60]}...")
         analyzed_at = datetime.now().strftime("%Y-%m-%d %H:%M")
         cache_entry = {"bvid": bvid, "title": vi["title"], "desc": vi.get("desc", "")[:200], "owner_name": vi["owner_name"], "owner_mid": str(vi["owner_mid"]), "tname": vi["tname"], "analysis": analysis, "summary": self._clip_media_text(analysis, 360), "time": analyzed_at, "analysis_basis": vi.get("analysis_basis", "legacy"), "content_analyzed": vi.get("analysis_basis") != "metadata"}
+        cache_entry.update(subtitle_reading=vi.get('subtitle_reading',{}),subtitle_evidence=vi.get('subtitle_evidence',{}))
         vc = self._load_json(VIDEO_MEMORY_FILE, {})
         previous = vc.get(bvid, {})
         if vi.get("_analysis_from_cache") and isinstance(previous, dict):

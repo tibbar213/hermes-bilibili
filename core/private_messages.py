@@ -735,6 +735,37 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             )
         return data.get("data") or {}
 
+    async def _fetch_private_backlog(self, talker_id, session_type, last_seqno):
+        """History is newest-first; page backwards before committing any cursor."""
+        cursor = 0
+        found = {}
+        for page in range(10):
+            payload = await self._fetch_private_session_messages(talker_id, session_type, cursor)
+            rows = payload.get('messages')
+            if not isinstance(rows, list):
+                raise RuntimeError('私信历史缺少消息列表，保留游标')
+            seqs = []
+            reached = False
+            for row in rows:
+                seq = int(row.get('msg_seqno') or 0)
+                if seq <= 0:
+                    raise RuntimeError('私信历史缺少有效序号，保留游标')
+                seqs.append(seq)
+                if seq <= last_seqno:
+                    reached = True
+                key = str(row.get('msg_key') or seq)
+                found[key] = row
+            more = payload.get('has_more')
+            if reached or more in (0, '0', False) or (more is None and len(rows)<20):
+                return {'messages': sorted(found.values(),key=lambda row:(int(row.get('timestamp') or 0),int(row.get('msg_seqno') or 0)),reverse=True)}
+            if not seqs:
+                raise RuntimeError('私信历史空页却声明还有更多，保留游标')
+            next_cursor = min(seqs)
+            if cursor and next_cursor>=cursor:
+                raise RuntimeError('私信历史分页未前进，保留游标')
+            cursor = next_cursor
+        raise RuntimeError('私信积压超过单轮10页，保留游标，需要人工检查')
+
     async def _poll_private_inbox(self):
         self_uid = str(self.config.get("DEDE_USER_ID", "") or "").strip()
         state = self._load_json(
@@ -820,13 +851,14 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
             if last_seqno and remote_max and remote_max <= last_seqno:
                 continue
             try:
-                payload = await self._fetch_private_session_messages(
+                payload = await self._fetch_private_backlog(
                     talker_id, session_type, last_seqno
                 )
             except Exception as exc:
                 # -509 是账号级请求频控，继续遍历其他会话只会增加请求量。
                 # 交给外层统一退避，避免每个主循环周期都继续撞接口。
-                if "code=-509" in str(exc):
+                from .request_guard import BilibiliPaused
+                if isinstance(exc, BilibiliPaused) or "code=-509" in str(exc):
                     raise
                 logger.warning(f"[BiliBot] 私信会话 {talker_id} 拉取失败: {exc}")
                 continue
@@ -881,13 +913,9 @@ query 只保留用于B站搜索的关键词或UP主名字，不要包含“帮�
                     reached_limit = True
                     break
 
-            if reached_limit:
-                observed_max = examined_max
-            else:
-                observed_max = max(
-                    [last_seqno, remote_max, int(payload.get("max_seqno") or 0)]
-                    + [int(item.get("msg_seqno") or 0) for item in messages]
-                )
+            # Advance only through messages actually examined and persisted.
+            # A session's remote_max can race ahead of the history response.
+            observed_max = examined_max
             session_state[key] = observed_max
 
         state["account_uid"] = self_uid

@@ -161,6 +161,9 @@ class UtilsMixin:
         raise last_err
 
     async def _http_post(self, url, headers=None, data=None, timeout=10, retries=2):
+        from .request_guard import is_bilibili_url
+        if is_bilibili_url(url):
+            retries = 0  # A transport error cannot establish that a write was not delivered.
         last_err = None
         for i in range(retries + 1):
             try:

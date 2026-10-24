@@ -194,21 +194,25 @@ class BilibiliAPIMixin:
             ik, sk = await self._get_wbi_keys()
             mk = self._get_mixin_key(ik + sk)
             params["wts"] = int(time.time())
-            params = dict(sorted(params.items()))
-            params["w_rid"] = hashlib.md5(("&".join(f"{k}={v}" for k, v in params.items()) + mk).encode()).hexdigest()
+            from urllib.parse import urlencode
+            params = {k:re.sub(r"[!'()*]",'',str(v)) for k,v in sorted(params.items())}
+            params["w_rid"] = hashlib.md5((urlencode(params) + mk).encode()).hexdigest()
             return params
         except Exception as e:
-            logger.warning(f"[BiliBot] WBI 签名失败，将以未签名参数请求（接口大概率返回 -352）: {e}")
-            return params
+            logger.warning('[BiliBot] WBI 签名失败，本次停止，不发送未签名请求')
+            raise
 
     async def _wbi_get(self, url, params):
-        """签名并请求 wbi 接口；遇 -352 时清缓存、用原始参数重新签名并立即重试一次。"""
+        """签名请求；风控码由账号请求保护暂停，不立即重试。"""
         raw = dict(params)
         d, r = await self._http_get(url, params=await self.sign_wbi_params(dict(raw)))
         if isinstance(d, dict) and d.get("code") == -352:
             self._wbi_keys_cache = None
-            logger.warning("[BiliBot] wbi 接口返回 -352，重新签名重试一次")
-            d, r = await self._http_get(url, params=await self.sign_wbi_params(dict(raw)))
+            from .traffic_guard import risk_pause
+            from .request_guard import data_directory, BilibiliPaused
+            from urllib.parse import urlsplit
+            risk_pause(data_directory(self.config),urlsplit(url).path)
+            raise BilibiliPaused('WBI 请求被风控，停止立即重签重试')
         return d, r
 
     # ── 扫码登录 ──
@@ -457,55 +461,55 @@ class BilibiliAPIMixin:
         return None
 
     async def _get_video_subtitles(self, bvid, cid):
-        """获取视频字幕文本"""
+        """Fetch signed tracks immediately, retaining complete subtitle evidence."""
+        from .subtitles import subtitle_url, save_subtitles
+        from .request_guard import BilibiliPaused
         if not bvid or not cid:
             return ""
+        receipts = getattr(self, '_subtitle_receipts', {})
+        self._subtitle_receipts = receipts
+        if len(receipts) > 32:
+            receipts.pop(next(iter(receipts)))
+        receipts[str(bvid)] = {'status':'fetch_failed'}
         try:
-            d, _ = await self._http_get(
-                "https://api.bilibili.com/x/player/v2",
-                params={"bvid": bvid, "cid": cid},
-            )
-            if not isinstance(d, dict) or d.get("code") != 0:
-                return ""
-            subtitles = (d.get("data") or {}).get("subtitle", {}).get("subtitles", [])
+            d, _ = await self._wbi_get('https://api.bilibili.com/x/player/wbi/v2', {'bvid':bvid,'cid':cid})
+            data = d.get('data') or {} if isinstance(d,dict) else {}
+            subtitles = (data.get('subtitle') or {}).get('subtitles') or []
+            source = 'player/wbi/v2'
             if not subtitles:
-                return ""
-            # 优先中文字幕，并保留轨道信息供日志排查 B站自动字幕错配。
-            selected_subtitle = None
-            for s in subtitles:
-                lan = s.get("lan", "")
-                if "zh" in lan or "cn" in lan:
-                    selected_subtitle = s
-                    break
-            if selected_subtitle is None and subtitles:
-                selected_subtitle = subtitles[0]
-            sub_url = (selected_subtitle or {}).get("subtitle_url", "")
-            if not sub_url:
-                return ""
-            if sub_url.startswith("//"):
-                sub_url = "https:" + sub_url
-            # 获取字幕JSON
-            sub_data, _ = await self._http_get(sub_url)
-            if not isinstance(sub_data, dict):
-                return ""
-            body = sub_data.get("body", [])
-            if not body:
-                return ""
-            # 拼接字幕文本，限制长度
-            lines = [item.get("content", "") for item in body if item.get("content")]
-            full_text = " ".join(lines)
-            if len(full_text) > 2000:
-                full_text = full_text[:2000] + "…（字幕过长已截断）"
-            lan = (selected_subtitle or {}).get("lan", "?")
-            subtitle_id = (selected_subtitle or {}).get("id_str") or (selected_subtitle or {}).get("id", "?")
-            logger.info(
-                f"[BiliBot] 📝 获取候选字幕: bvid={bvid} cid={cid} "
-                f"lan={lan} id={subtitle_id} {len(lines)}条 {len(full_text)}字"
-            )
-            return full_text
-        except Exception as e:
-            logger.debug(f"[BiliBot] 字幕获取失败: {e}")
-            return ""
+                view, _ = await self._http_get('https://api.bilibili.com/x/web-interface/view',params={'bvid':bvid})
+                aid = (view.get('data') or {}).get('aid') if view.get('code')==0 else None
+                if aid:
+                    try:
+                        fallback,_ = await self._http_get('https://api.bilibili.com/x/v2/subtitle/web/view',params={'oid':aid,'pid':aid,'type':1,'context_ext':'{"video_type":1}','cur_production_type':0,'preferred_language':'ai-zh','playlist_switch':0})
+                        subtitles = (((fallback.get('data') or {}).get('subtitle') or {}).get('subtitles') or []) if isinstance(fallback,dict) else []
+                        source = 'subtitle/web/view'
+                    except (ValueError,aiohttp.ContentTypeError):
+                        pass
+            if not subtitles:
+                status = (data.get('subtitle') or {}).get('ai_status')
+                receipts[str(bvid)] = {'status':'generating' if status==2 else 'unavailable','player_code':d.get('code'),'ai_status':status}
+                return ''
+            tracks = sorted(subtitles,key=lambda row:0 if str(row.get('lan','')).startswith('zh') else 1 if str(row.get('lan','')).startswith('ai-zh') else 2)
+            for track in tracks[:3]:
+                try:
+                    url = subtitle_url(track.get('subtitle_url'))
+                    payload, response = await self._http_get(url,headers={'User-Agent':USER_AGENT,'Referer':'https://www.bilibili.com/'},retries=0)
+                    if response is not None and response.status>=400:
+                        continue
+                    text,meta = save_subtitles(self.config,bvid,cid,track,payload,source)
+                    receipts[str(bvid)] = meta
+                    logger.info('[BiliBot] 完整字幕已保存 bvid=%s lines=%s characters=%s',bvid,meta['lines'],meta['characters'])
+                    return text
+                except (ValueError,TypeError,aiohttp.ClientError):
+                    continue
+            receipts[str(bvid)] = {'status':'tracks_unavailable'}
+        except BilibiliPaused:
+            receipts[str(bvid)] = {'status':'request_paused'}
+            raise
+        except Exception as exc:
+            logger.debug('[BiliBot] 字幕获取未完成: %s',type(exc).__name__)
+        return ''
 
     async def _get_video_tags(self, bvid):
         try:

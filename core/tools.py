@@ -878,13 +878,14 @@ def create_tools(plugin):
             "Do not repeatedly rephrase empty searches or search other dates without a reason. "
             "A posted dynamic alone does not prove that its source video was watched."
             " Use activity for dated browsing/proactive-comment receipts and consumed daily budgets."
+            " Use delivery to read back one comment receipt (query=receipt ID or rpid, empty=latest); API acceptance alone does not prove public visibility."
         )
         parameters: dict = Field(default_factory=lambda: {
             "type": "object",
             "properties": {
                 "memory_type": {
                     "type": "string",
-                    "enum": ["user", "conversation", "today", "activity", "video", "dynamic", "bangumi"],
+                    "enum": ["user", "conversation", "today", "activity", "video", "dynamic", "bangumi", "delivery"],
                     "description": "memory category",
                 },
                 "query": {
@@ -922,6 +923,9 @@ def create_tools(plugin):
                 return await RecallTodayTool().call(context, date=query)
             if memory_type == "activity":
                 return json.dumps(plugin.memory_api.activity_records(query, kwargs.get('activity_kind','all'), kwargs.get('limit',30)), ensure_ascii=False)
+            if memory_type == "delivery":
+                from .comment_delivery import verify_comment
+                return json.dumps(await verify_comment(plugin,query),ensure_ascii=False)
             if memory_type == "video":
                 if not query:
                     return "请提供视频记忆关键词。"

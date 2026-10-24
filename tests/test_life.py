@@ -177,7 +177,7 @@ def test_native_comments_are_budgeted_deduplicated_and_never_blindly_retried(tmp
         await layered.open()
         event=EventRuntime(observer=layered)
         post=AsyncMock(side_effect=TimeoutError('unknown')) if uncertain else AsyncMock(return_value=({'code':0},None))
-        native=SimpleNamespace(open=AsyncMock(),runtime=SimpleNamespace(config=config,
+        native=SimpleNamespace(home=tmp_path,open=AsyncMock(),runtime=SimpleNamespace(config=config,
             _http_post=post,_get_video_oid=AsyncMock(return_value=123),event_runtime=event))
         try:
             first=await Host.life_action(native,{'action':'comment','bvid':'BV0000000001','text':'这个思路挺有意思'})
