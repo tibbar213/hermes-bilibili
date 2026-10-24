@@ -5,6 +5,7 @@ import time
 import hashlib
 import uuid
 import aiohttp
+import asyncio
 from .network import plugin_http_session
 from functools import reduce
 import logging
@@ -256,11 +257,19 @@ class BilibiliAPIMixin:
         if not msg or not re.search(r'[0-9A-Za-z一-鿿]', msg):
             logger.warning(f"[BiliBot] 回复内容无效（空/纯标点），跳过发送：{content!r}")
             return False
+        from .request_guard import data_directory, reserve_reply, finish_reply, BilibiliPaused
+        directory = data_directory(self.config)
+        token, reason = reserve_reply(directory, self.config)
+        if not token:
+            logger.info('[BiliBot] 回复在发送前停止：%s', reason)
+            return False
         try:
             d, _ = await self._http_post(
                 BILI_REPLY_URL,
                 data={"oid": oid, "type": reply_type, "root": rpid, "parent": rpid, "message": msg, "csrf": self.config.get("BILI_JCT", "")},
+                retries=0,
             )
+            finish_reply(directory, token, 'sent' if d.get('code') == 0 else 'failed')
             if d["code"] == 0:
                 return True
             elif d["code"] == -101:
@@ -270,9 +279,16 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 回复失败: {d.get('message', d['code'])}")
             return False
-        except Exception as e:
-            logger.error(f"[BiliBot] 回复出错: {e}")
+        except BilibiliPaused:
+            finish_reply(directory, token, 'failed')
             return False
+        except (aiohttp.ClientError, asyncio.TimeoutError, ConnectionResetError) as exc:
+            finish_reply(directory, token, 'unknown')
+            raise TimeoutError('评论回复发送结果未确认，不自动重发') from exc
+        except Exception as e:
+            finish_reply(directory, token, 'unknown')
+            logger.error(f"[BiliBot] 回复出错: {e}")
+            raise TimeoutError('评论回复发送结果未确认，不自动重发') from e
 
     def _strip_at_prefix(self, content):
         content = (content or "").strip()

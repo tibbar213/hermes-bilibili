@@ -82,4 +82,6 @@ def daily_usage(data_dir, config, date):
         report[kind] = {'used': used, 'limit': cap, 'remaining': max(0, cap-used) if cap is not None else None}
     report['global'] = {'used': counts.get('behavior:global:day', 0),
                         'limit': budget._int('BEHAVIOR_GLOBAL_DAILY_LIMIT', 200) if config.get('BEHAVIOR_BUDGET_ENABLED', True) else None}
-    return {'date': date, 'usage': report, 'note': '计入预算的已确认及未确认操作；已退额的失败尝试不计入。浏览流水条数不等于已用看片额度。评论回复设为每日不限时仍记录次数，但不占总日预算；每分钟限速保留。'}
+    from .request_guard import guard_status
+    return {'date': date, 'usage': report, 'request_guard_now':guard_status(data_dir,config),
+            'note': '预算统计保留已确认和未确认操作，已退额失败不计入；回复发送节流单独统计实际请求尝试，失败也不退还节流名额。浏览流水条数不等于已用看片额度。每日不限的回复不占总日预算，每分钟限速仍保留。'}

@@ -9,3 +9,9 @@
 `AUTONOMOUS_REPLY_DAILY_LIMIT=0` 表示评论回复每日不限，次数仍计入回复计数，但后续回复不消耗总日预算，避免被总日上限间接限制；每分钟限速仍生效。状态查询中 `limit=null` 表示没有该项日上限。其他类别仍要求正整数上限，动态上限通过 `AUTONOMOUS_DYNAMIC_DAILY_LIMIT` 配置。
 
 升级后开始自动记录。历史回填只允许从确切工具回执恢复；不能把简介推测补成已观看，也不能凭后来重复提交的文字推断原评论正文。没有回执的历史不承诺完整。查询不会发布评论、动态或群消息。
+
+## 评论回复发送保护
+
+可在 profile 的 bilibili/settings.json 配置 COMMENT_REPLY_MIN_INTERVAL（秒，未配置为 0）、COMMENT_REPLY_HOURLY_LIMIT（滚动一小时，未配置为 0），以及 AUTONOMOUS_REPLY_DAILY_LIMIT（日额度）。例如分别设置 120、12、30。发送前使用 SQLite 原子占位，失败和结果未确认也占发送节流名额，避免自动重试形成连发；现有业务预算退款规则不变。状态中的 request_guard_now 返回当前间隔、次数和恢复时间，查询历史日期时它仍代表当前发送保护状态。
+
+插件统一 HTTP session 遇到 B 站 HTTP 412/429 后，将暂停截止时间持久化，随后 300 秒内拦截该 profile 的 B 站请求；重启不清除暂停，模型服务不受影响。此处尚未实现全局单并发、全部读取预算、业务风控码或递增暂停。

@@ -601,6 +601,12 @@ class ReplyMixin(CommentContextMixin):
     async def _poll_unified(self):
         if time.time() < self._reply_cooldown_until:
             return
+        if self.config.get('COMMENT_REPLY_MIN_INTERVAL') or self.config.get('COMMENT_REPLY_HOURLY_LIMIT'):
+            from .request_guard import guard_status, data_directory
+            status = guard_status(data_directory(self.config), self.config)
+            if status['next_reply_at'] > time.time():
+                self._reply_cooldown_until = status['next_reply_at']
+                return
         try:
             replied = set(self._load_json(REPLIED_FILE, []))
             pending = []

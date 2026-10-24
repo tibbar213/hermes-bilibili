@@ -73,7 +73,19 @@ class _ProxySession:
 @asynccontextmanager
 async def plugin_http_session(config):
     proxy = configured_proxy(config)
-    options = {}
+    from .request_guard import is_bilibili_url, data_directory, check_pause, pause_requests, BilibiliPaused
+    trace = aiohttp.TraceConfig()
+    async def before_request(session, context, params):
+        if is_bilibili_url(params.url):
+            check_pause(data_directory(config))
+    async def after_request(session, context, params):
+        if is_bilibili_url(params.response.url) and params.response.status in {412, 429}:
+            pause_requests(data_directory(config))
+            params.response.release()
+            raise BilibiliPaused(f'B站返回 HTTP {params.response.status}，请求已暂停300秒，不立即重试')
+    trace.on_request_start.append(before_request)
+    trace.on_request_end.append(after_request)
+    options = {'trace_configs':[trace]}
     if proxy.startswith("socks5://"):
         try:
             from aiohttp_socks import ProxyConnector
