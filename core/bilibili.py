@@ -261,7 +261,7 @@ class BilibiliAPIMixin:
         if not msg or not re.search(r'[0-9A-Za-z一-鿿]', msg):
             logger.warning(f"[BiliBot] 回复内容无效（空/纯标点），跳过发送：{content!r}")
             return False
-        from .request_guard import data_directory, reserve_reply, finish_reply, BilibiliPaused
+        from .request_guard import data_directory, reserve_reply, finish_reply, cancel_reply, BilibiliPaused, BilibiliNotDispatched
         directory = data_directory(self.config)
         token, reason = reserve_reply(directory, self.config)
         if not token:
@@ -283,6 +283,17 @@ class BilibiliAPIMixin:
             else:
                 logger.warning(f"[BiliBot] 回复失败: {d.get('message', d['code'])}")
             return False
+        except BilibiliNotDispatched:
+            cancel_reply(directory, token)
+            raise
+        except asyncio.CancelledError:
+            from .action_deadline import ACTION_CLOCK
+            clock=ACTION_CLOCK.get()
+            if clock and clock['write'] and not clock['dispatched']:
+                cancel_reply(directory, token)
+            else:
+                finish_reply(directory, token, 'unknown')
+            raise
         except BilibiliPaused:
             finish_reply(directory, token, 'failed')
             return False

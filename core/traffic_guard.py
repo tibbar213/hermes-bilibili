@@ -16,10 +16,10 @@ import time
 import uuid
 from urllib.parse import parse_qsl, urlsplit
 
-from .request_guard import BilibiliPaused, check_pause, data_directory
+from .request_guard import BilibiliPaused, BilibiliNotDispatched, check_pause
 
-DEFAULTS = {'BILI_REQUEST_GAP_MS':1500, 'BILI_READ_HOURLY':600,
-            'BILI_READ_DAILY':3000, 'BILI_WRITE_HOURLY':12,
+DEFAULTS = {'BILI_REQUEST_GAP_MS':1500, 'BILI_READ_HOURLY':0,
+            'BILI_READ_DAILY':0, 'BILI_WRITE_HOURLY':12,
             'BILI_WRITE_DAILY':30, 'BILI_WRITE_GAP_SECONDS':120}
 RISK_CODES = {-412, -352, -799, -509, -10403}
 
@@ -29,7 +29,7 @@ def limits(config):
     for key, default in DEFAULTS.items():
         try:
             value = int(config.get(key, default))
-            result[key] = value if value > 0 else default
+            result[key] = value if value > 0 or (key in {'BILI_READ_HOURLY','BILI_READ_DAILY'} and value==0) else default
         except (TypeError, ValueError, OverflowError):
             result[key] = default
     result['BILI_REQUEST_GAP_MS'] = max(600, result['BILI_REQUEST_GAP_MS'])
@@ -49,6 +49,7 @@ def connect(directory):
         CREATE INDEX IF NOT EXISTS traffic_at ON traffic_attempts(at);
         CREATE TABLE IF NOT EXISTS traffic_lease (id INTEGER PRIMARY KEY CHECK(id=1),token TEXT,pid INTEGER,until REAL);
         CREATE TABLE IF NOT EXISTS traffic_risk (id INTEGER PRIMARY KEY CHECK(id=1),streak INTEGER,endpoint TEXT);
+        CREATE TABLE IF NOT EXISTS traffic_waiters (seq INTEGER PRIMARY KEY AUTOINCREMENT,token TEXT UNIQUE,pid INTEGER,expires REAL);
         ''')
         yield db
         db.commit()
@@ -89,7 +90,7 @@ def _alive(pid):
         return True
 
 
-def claim(directory, config, url, method, body=None, *, at=None):
+def claim(directory, config, url, method, body=None, *, at=None, waiter=None):
     """Return (token, wait_seconds). Only one process can claim a live slot."""
     at = time.time() if at is None else float(at)
     cfg = limits(config)
@@ -101,7 +102,13 @@ def claim(directory, config, url, method, body=None, *, at=None):
         db.execute('BEGIN IMMEDIATE')
         pause = db.execute("SELECT value FROM request_guard WHERE key='paused_until'").fetchone()
         if pause and pause[0]>at:
-            raise BilibiliPaused('B站请求冷却中，不立即重试')
+            raise BilibiliNotDispatched('B站请求冷却中，不立即重试')
+        for seq,pid,expires in db.execute('SELECT seq,pid,expires FROM traffic_waiters').fetchall():
+            if expires<=at or not _alive(pid):
+                db.execute('DELETE FROM traffic_waiters WHERE seq=?',(seq,))
+        head=db.execute('SELECT token FROM traffic_waiters ORDER BY seq LIMIT 1').fetchone()
+        if writing and head and head[0]!=waiter:
+            return None,.05
         lease = db.execute('SELECT token,pid,until FROM traffic_lease WHERE id=1').fetchone()
         if lease and lease[2]>at and _alive(lease[1]):
             return None, .05
@@ -113,14 +120,18 @@ def claim(directory, config, url, method, body=None, *, at=None):
         prefix = 'BILI_WRITE_' if writing else 'BILI_READ_'
         hourly = db.execute('SELECT count(*) FROM traffic_attempts WHERE writing=? AND at>?',(int(writing),at-3600)).fetchone()[0]
         daily = db.execute('SELECT count(*) FROM traffic_attempts WHERE writing=? AND day=?',(int(writing),day)).fetchone()[0]
-        if hourly>=cfg[prefix+'HOURLY'] or daily>=cfg[prefix+'DAILY']:
-            raise BilibiliPaused('B站账号读取额度已满' if not writing else 'B站账号写入额度已满')
+        if (cfg[prefix+'HOURLY'] and hourly>=cfg[prefix+'HOURLY']) or (cfg[prefix+'DAILY'] and daily>=cfg[prefix+'DAILY']):
+            raise BilibiliNotDispatched('B站账号读取额度已满' if not writing else 'B站账号写入额度已满')
         if writing:
+            if operation and db.execute("SELECT 1 FROM traffic_attempts WHERE operation=? AND (state IN ('pending','unknown') OR (state='accepted' AND at>?))",(operation,at-86400)).fetchone():
+                raise BilibiliNotDispatched('相同操作已受理或结果未确认，不重复发送')
             previous = db.execute('SELECT max(at) FROM traffic_attempts WHERE writing=1').fetchone()[0]
             if previous is not None and previous+cfg['BILI_WRITE_GAP_SECONDS']>at:
-                raise BilibiliPaused('B站账号写操作间隔未满120秒，不立即重试')
-            if operation and db.execute("SELECT 1 FROM traffic_attempts WHERE operation=? AND (state IN ('pending','unknown') OR (state='accepted' AND at>?))",(operation,at-86400)).fetchone():
-                raise BilibiliPaused('相同操作已受理或结果未确认，不重复发送')
+                return None,previous+cfg['BILI_WRITE_GAP_SECONDS']-at
+        elif head:
+            previous=db.execute('SELECT max(at) FROM traffic_attempts WHERE writing=1').fetchone()[0]
+            if previous is None or previous+cfg['BILI_WRITE_GAP_SECONDS']<=at:
+                return None,.05  # Let an eligible queued write take the next shared slot.
         token = uuid.uuid4().hex
         db.execute('INSERT INTO traffic_attempts(id,at,day,writing,endpoint,operation,state) VALUES(?,?,?,?,?,?,?)',(token,at,day,int(writing),endpoint,operation,'pending'))
         db.execute('INSERT OR REPLACE INTO traffic_lease VALUES(1,?,?,?)',(token,os.getpid(),at+90))
@@ -130,14 +141,28 @@ def claim(directory, config, url, method, body=None, *, at=None):
 
 
 async def acquire(directory, config, url, method, body=None):
-    deadline = time.monotonic()+30
-    while True:
-        token, wait = claim(directory,config,url,method,body)
-        if token:
-            return token
-        if time.monotonic()+wait>deadline:
-            raise BilibiliPaused('B站请求队列繁忙，本次停止')
-        await asyncio.sleep(max(.01,wait))
+    from contextlib import nullcontext
+    from .action_deadline import waiting_for_write
+    writing=method.upper() not in {'GET','HEAD','OPTIONS'}
+    deadline=time.monotonic()+(300 if writing else 30)
+    waiter=uuid.uuid4().hex if writing else None
+    if waiter:
+        with connect(directory) as db:
+            db.execute('INSERT INTO traffic_waiters(token,pid,expires) VALUES(?,?,?)',(waiter,os.getpid(),time.time()+360))
+    try:
+        with waiting_for_write() if writing else nullcontext():
+            while True:
+                token,wait=claim(directory,config,url,method,body,waiter=waiter)
+                if token:
+                    return token
+                if time.monotonic()+wait>deadline:
+                    raise BilibiliNotDispatched('发送前等待队列已满或超时，本次未发送')
+                # Recheck cancellation, quota and risk while waiting; hold no network lease.
+                await asyncio.sleep(min(1,max(.01,wait)))
+    finally:
+        if waiter:
+            with connect(directory) as db:
+                db.execute('DELETE FROM traffic_waiters WHERE token=?',(waiter,))
 
 
 def release(directory, token, state='unknown', rpid=''):
@@ -184,7 +209,8 @@ def traffic_status(directory,config,*,at=None):
                           'daily':db.execute('SELECT count(*) FROM traffic_attempts WHERE writing=? AND day=?',(writing,day)).fetchone()[0]}
             prefix='BILI_WRITE_' if writing else 'BILI_READ_'
             cfg=limits(config)
-            counts[name]['remaining_hourly']=max(0,cfg[prefix+'HOURLY']-counts[name]['hourly'])
-            counts[name]['remaining_daily']=max(0,cfg[prefix+'DAILY']-counts[name]['daily'])
+            counts[name]['remaining_hourly']=max(0,cfg[prefix+'HOURLY']-counts[name]['hourly']) if cfg[prefix+'HOURLY'] else None
+            counts[name]['remaining_daily']=max(0,cfg[prefix+'DAILY']-counts[name]['daily']) if cfg[prefix+'DAILY'] else None
         row=db.execute('SELECT streak FROM traffic_risk WHERE id=1').fetchone()
-    return {'limits':limits(config),'attempts':counts,'risk_streak':row[0] if row else 0,'single_concurrency':True}
+        queued=db.execute('SELECT count(*) FROM traffic_waiters WHERE expires>?',(at,)).fetchone()[0]
+    return {'limits':limits(config),'attempts':counts,'risk_streak':row[0] if row else 0,'single_concurrency':True,'queued_writes':queued}

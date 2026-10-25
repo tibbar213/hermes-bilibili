@@ -174,11 +174,14 @@ class Host:
                 return {'skipped':True,'reason':'视频不存在或信息不可读'}
             receipt = {}
             async def send():
+                from .core.request_guard import BilibiliPaused
                 try:
                     payload,_=await self.runtime._http_post(BILI_REPLY_URL,
                         data={'oid':int(oid),'type':1,'message':text,'csrf':self.runtime.config.get('BILI_JCT','')},retries=0)
                     if not isinstance(payload,dict) or 'code' not in payload:
                         raise ValueError('Missing result')
+                except BilibiliPaused:
+                    raise  # A known local block or explicit risk rejection is not an uncertain send.
                 except Exception as exc:
                     raise TimeoutError('评论发送结果未确认，不自动重发') from exc
                 if payload['code'] == 0:

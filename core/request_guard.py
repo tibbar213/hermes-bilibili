@@ -12,6 +12,11 @@ class BilibiliPaused(RuntimeError):
     pass
 
 
+class BilibiliNotDispatched(BilibiliPaused):
+    """Rejected before the HTTP attempt; it is safe to report a known failure."""
+    pass
+
+
 def is_bilibili_url(url):
     host = (urlsplit(str(url)).hostname or '').lower()
     return any(host == domain or host.endswith('.'+domain) for domain in
@@ -49,7 +54,7 @@ def check_pause(directory, *, at=None):
     with _connect(directory) as db:
         row = db.execute("SELECT value FROM request_guard WHERE key='paused_until'").fetchone()
     if row and row[0] > at:
-        raise BilibiliPaused(f'B站请求冷却中，还需等待{max(1, int(row[0]-at))}秒；不立即重试')
+        raise BilibiliNotDispatched(f'B站请求冷却中，还需等待{max(1, int(row[0]-at))}秒；不立即重试')
 
 
 def pause_requests(directory, *, at=None):
@@ -93,6 +98,12 @@ def reserve_reply(directory, config, *, at=None):
 def finish_reply(directory, token, state):
     with _connect(directory) as db:
         db.execute('UPDATE reply_dispatch SET state=? WHERE id=?', (state, token))
+
+
+def cancel_reply(directory, token):
+    """No network attempt occurred; do not charge the reply pacing ledger."""
+    with _connect(directory) as db:
+        db.execute('DELETE FROM reply_dispatch WHERE id=?',(token,))
 
 
 def guard_status(directory, config, *, at=None):

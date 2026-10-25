@@ -61,6 +61,9 @@ class _GuardedRequest:
             self.deadline=asyncio.timeout(45)
             await self.deadline.__aenter__()
             self.kwargs['allow_redirects']=False
+            if self.method not in {'GET','HEAD','OPTIONS'}:
+                from .action_deadline import mark_write_dispatch
+                mark_write_dispatch()
             self.response=await self.session.request(self.method,self.url,**self.kwargs)
             if self.response.status in {412,429}:
                 risk_pause(self.directory,urlsplit(str(self.url)).path,self.response.headers.get('Retry-After'))

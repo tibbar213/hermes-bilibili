@@ -44,7 +44,8 @@ def test_global_rolling_hour_limits_and_shared_write_cooldown(tmp_path,writing):
 def test_write_limits_cover_different_endpoints_and_unknown_duplicate(tmp_path):
     first,_=claim(tmp_path,{},'https://api.bilibili.com/comment','POST',{'message':'hello','csrf':'first'},at=10000)
     release(tmp_path,first,'unknown')
-    with pytest.raises(BilibiliPaused):claim(tmp_path,{},'https://api.bilibili.com/dynamic','POST',{'content':'different'},at=10119)
+    token,wait=claim(tmp_path,{},'https://api.bilibili.com/dynamic','POST',{'content':'different'},at=10119)
+    assert token is None and wait==1
     with pytest.raises(BilibiliPaused):claim(tmp_path,{},'https://api.bilibili.com/comment','POST',{'message':'hello','csrf':'changed'},at=200000)
     second,_=claim(tmp_path,{},'https://api.bilibili.com/dynamic','POST',{'content':'different'},at=10120)
     assert second

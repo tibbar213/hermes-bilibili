@@ -540,12 +540,13 @@ class EventRuntime:
                     future.set_result(outcome)
             except asyncio.CancelledError:
                 if not future.done():
+                    record = self._actions.get(request.key)
                     future.set_result(
                         ActionOutcome(
                             False,
                             request.key,
-                            reason="send_state_unknown:worker_cancelled",
-                            state=ActionState.UNKNOWN.value,
+                            reason=record.reason if record else "send_state_unknown:worker_cancelled",
+                            state=record.state.value if record else ActionState.UNKNOWN.value,
                         )
                     )
                 async with self._action_queue_lock:
@@ -595,16 +596,25 @@ class EventRuntime:
                 "on_event_transition", sending_event, EventState.SENDING, ""
             )
 
+        clock = None
         try:
             value = handler()
             if inspect.isawaitable(value):
-                value = await asyncio.wait_for(value, timeout=self.action_timeout)
+                from .action_deadline import ACTION_CLOCK
+                async with asyncio.timeout(self.action_timeout) as deadline:
+                    clock = {'deadline':deadline,'write':False,'dispatched':False}
+                    token = ACTION_CLOCK.set(clock)
+                    try:
+                        value = await value
+                    finally:
+                        ACTION_CLOCK.reset(token)
             succeeded = success(value) if success is not None else bool(value)
             state = ActionState.SUCCEEDED if succeeded else ActionState.FAILED
             reason = "" if succeeded else "handler_returned_unsuccessful"
         except asyncio.CancelledError:
-            reason = "send_state_unknown:worker_cancelled"
-            await self._finish_action(request, ActionState.UNKNOWN, None, reason)
+            unsent = clock is not None and clock['write'] and not clock['dispatched']
+            reason = 'not_dispatched:queue_cancelled' if unsent else "send_state_unknown:worker_cancelled"
+            await self._finish_action(request, ActionState.FAILED if unsent else ActionState.UNKNOWN, None, reason)
             raise
         except (asyncio.TimeoutError, TimeoutError) as exc:
             reason = f"send_state_unknown:{exc or 'timeout'}"
